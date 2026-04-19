@@ -7,27 +7,19 @@ local state = {
     subtitle_mode = "dual",
 }
 
-local primary_keywords = {
-    "sign", "songs", "song", "forced", "karaoke", "lyrics", "op", "ed",
+local signs_keywords = {
+    "sign", "signs", "song", "songs", "karaoke", "lyrics", "forced", "op", "ed",
 }
 
-local secondary_keywords = {
-    "cc", "sdh", "closed caption", "closed captions", "dubtitle", "dubtitles",
-    "dub cc", "dialogue", "dialog", "full sub", "full subs", "full subtitle",
-    "full subtitles", "hearing impaired",
+local cc_keywords = {
+    "cc", "sdh", "closed caption", "closed captions", "hearing impaired",
+    "dialogue", "dialog", "full sub", "full subs", "full subtitle",
+    "full subtitles", "dubtitle", "dubtitles", "dub cc",
 }
 
 local function round(value, digits)
     local power = 10 ^ (digits or 0)
     return math.floor((value * power) + 0.5) / power
-end
-
-local function track_text(track)
-    local parts = {
-        tostring(track.title or ""),
-        tostring(track.lang or ""),
-    }
-    return table.concat(parts, " "):lower()
 end
 
 local function has_any(text, keywords)
@@ -37,6 +29,49 @@ local function has_any(text, keywords)
         end
     end
     return false
+end
+
+local function track_text(track)
+    local parts = {
+        tostring(track.title or ""),
+        tostring(track.lang or ""),
+        tostring(track.codec or ""),
+        tostring(track["codec-desc"] or ""),
+        tostring(track["external-filename"] or ""),
+    }
+    return table.concat(parts, " "):lower()
+end
+
+local function track_lang(track)
+    return tostring(track.lang or ""):lower()
+end
+
+local function track_codec(track)
+    return tostring(track.codec or track["codec-desc"] or ""):lower()
+end
+
+local function is_english(track)
+    local lang = track_lang(track)
+    local text = track_text(track)
+    return lang == "en" or lang == "eng" or text:find("english", 1, true) ~= nil
+end
+
+local function is_subrip(track)
+    local codec = track_codec(track)
+    return codec == "srt" or codec:find("subrip", 1, true) ~= nil
+end
+
+local function is_ass(track)
+    local codec = track_codec(track)
+    return codec:find("ass", 1, true) ~= nil or codec:find("ssa", 1, true) ~= nil
+end
+
+local function is_signs_like(track)
+    return track.forced or has_any(track_text(track), signs_keywords)
+end
+
+local function is_cc_like(track)
+    return has_any(track_text(track), cc_keywords)
 end
 
 local function display_track_name(track)
@@ -115,7 +150,172 @@ local function find_track_by_id(id)
             return track
         end
     end
+
     return nil
+end
+
+local function best_track(tracks, scorer, excluded_id)
+    local best = nil
+    local best_score = -math.huge
+
+    for _, track in ipairs(tracks) do
+        if tonumber(track.id) ~= tonumber(excluded_id) then
+            local score = scorer(track)
+            if best == nil or score > best_score then
+                best = track
+                best_score = score
+            end
+        end
+    end
+
+    return best, best_score
+end
+
+local function score_regular_primary(track, current_sid)
+    local score = 0
+
+    if tonumber(track.id) == tonumber(current_sid) then
+        score = score + 25
+    end
+    if is_english(track) then
+        score = score + 120
+    end
+    if track.default then
+        score = score + 35
+    end
+    if is_subrip(track) then
+        score = score + 20
+    elseif is_ass(track) then
+        score = score + 12
+    end
+    if is_cc_like(track) then
+        score = score + 30
+    end
+    if is_signs_like(track) then
+        score = score - 120
+    end
+
+    return score
+end
+
+local function score_signs_primary(track, current_sid)
+    local score = 0
+
+    if tonumber(track.id) == tonumber(current_sid) then
+        score = score + 25
+    end
+    if is_english(track) then
+        score = score + 70
+    end
+    if is_signs_like(track) then
+        score = score + 170
+    end
+    if track.forced then
+        score = score + 40
+    end
+    if is_ass(track) then
+        score = score + 25
+    end
+    if is_subrip(track) then
+        score = score - 80
+    end
+    if is_cc_like(track) then
+        score = score - 140
+    end
+
+    return score
+end
+
+local function score_dialogue_secondary(track, current_secondary_sid)
+    local score = 0
+
+    if tonumber(track.id) == tonumber(current_secondary_sid) then
+        score = score + 20
+    end
+    if is_english(track) then
+        score = score + 100
+    end
+    if is_subrip(track) then
+        score = score + 110
+    elseif is_ass(track) then
+        score = score + 10
+    end
+    if is_cc_like(track) then
+        score = score + 80
+    end
+    if track.default then
+        score = score + 10
+    end
+    if is_signs_like(track) then
+        score = score - 180
+    end
+
+    return score
+end
+
+local function choose_anime_dual_pair()
+    local subs = subtitle_tracks()
+    if #subs < 2 then
+        return nil, nil
+    end
+
+    local current_sid = mp.get_property_number("sid", -1)
+    local current_secondary_sid = mp.get_property_number("secondary-sid", -1)
+
+    local signs_track, signs_score = best_track(subs, function(track)
+        return score_signs_primary(track, current_sid)
+    end)
+
+    if not signs_track or signs_score < 180 then
+        return nil, nil
+    end
+
+    local dialogue_track, dialogue_score = best_track(subs, function(track)
+        return score_dialogue_secondary(track, current_secondary_sid)
+    end, signs_track.id)
+
+    if not dialogue_track or dialogue_score < 150 then
+        return nil, nil
+    end
+
+    return signs_track, dialogue_track
+end
+
+local function choose_regular_primary()
+    local subs = subtitle_tracks()
+    if #subs == 0 then
+        return nil
+    end
+
+    local current_sid = mp.get_property_number("sid", -1)
+    local primary, score = best_track(subs, function(track)
+        return score_regular_primary(track, current_sid)
+    end)
+
+    if primary and score > 0 then
+        return primary
+    end
+
+    return find_track_by_id(current_sid) or subs[1]
+end
+
+local function choose_primary_track()
+    local anime_primary = choose_anime_dual_pair()
+    if anime_primary then
+        return anime_primary
+    end
+
+    return choose_regular_primary()
+end
+
+local function choose_dual_tracks()
+    local anime_primary, anime_secondary = choose_anime_dual_pair()
+    if anime_primary and anime_secondary then
+        return anime_primary, anime_secondary
+    end
+
+    local primary = choose_regular_primary()
+    return primary, nil
 end
 
 local function current_subtitle_mode()
@@ -134,108 +334,6 @@ local function current_subtitle_mode()
     return "primary"
 end
 
-local function best_track(tracks, scorer, excluded_id)
-    local best
-    local best_score = -math.huge
-
-    for _, track in ipairs(tracks) do
-        if tonumber(track.id) ~= tonumber(excluded_id) then
-            local score = scorer(track)
-            if best == nil or score > best_score then
-                best = track
-                best_score = score
-            end
-        end
-    end
-
-    return best, best_score
-end
-
-local function score_primary_track(track, current_sid)
-    local text = track_text(track)
-    local score = 0
-
-    if tonumber(track.id) == tonumber(current_sid) then
-        score = score + 25
-    end
-    if track.forced then
-        score = score + 35
-    end
-    if has_any(text, primary_keywords) then
-        score = score + 120
-    end
-    if has_any(text, secondary_keywords) then
-        score = score - 140
-    end
-
-    return score
-end
-
-local function score_secondary_track(track, current_secondary_sid)
-    local text = track_text(track)
-    local score = 0
-
-    if tonumber(track.id) == tonumber(current_secondary_sid) then
-        score = score + 25
-    end
-    if track.default then
-        score = score + 10
-    end
-    if has_any(text, secondary_keywords) then
-        score = score + 140
-    end
-    if has_any(text, {"english", "eng"}) then
-        score = score + 10
-    end
-    if has_any(text, primary_keywords) then
-        score = score - 140
-    end
-
-    return score
-end
-
-local function choose_dual_tracks()
-    local subs = subtitle_tracks()
-    if #subs == 0 then
-        return nil, nil
-    end
-
-    if #subs == 1 then
-        return subs[1], nil
-    end
-
-    local current_sid = mp.get_property_number("sid", -1)
-    local current_secondary_sid = mp.get_property_number("secondary-sid", -1)
-    local current_primary = find_track_by_id(current_sid)
-
-    local preferred_primary, primary_score = best_track(subs, function(track)
-        return score_primary_track(track, current_sid)
-    end)
-
-    local preferred_secondary, secondary_score = best_track(subs, function(track)
-        return score_secondary_track(track, current_secondary_sid)
-    end, preferred_primary and preferred_primary.id or nil)
-
-    if preferred_primary and preferred_secondary and preferred_primary.id ~= preferred_secondary.id and (primary_score > 20 or secondary_score > 20) then
-        return preferred_primary, preferred_secondary
-    end
-
-    local primary = current_primary or subs[1]
-    local secondary = nil
-    for _, track in ipairs(subs) do
-        if tonumber(track.id) ~= tonumber(primary.id) then
-            if not secondary then
-                secondary = track
-            end
-            if score_secondary_track(track, current_secondary_sid) > score_secondary_track(secondary, current_secondary_sid) then
-                secondary = track
-            end
-        end
-    end
-
-    return primary, secondary
-end
-
 local function status_message_for(mode, primary_track, secondary_track)
     if mode == "off" then
         return "Subtitle Mode: Off"
@@ -245,11 +343,11 @@ local function status_message_for(mode, primary_track, secondary_track)
         return "Subtitle Mode: Primary [" .. display_track_name(primary_track) .. "]"
     end
 
-    if not secondary_track then
-        return "Subtitle Mode: Dual (No 2nd Track)"
+    if secondary_track then
+        return "Subtitle Mode: Dual [" .. display_track_name(primary_track) .. " + " .. display_track_name(secondary_track) .. "]"
     end
 
-    return "Subtitle Mode: Dual [" .. display_track_name(primary_track) .. " + " .. display_track_name(secondary_track) .. "]"
+    return "Subtitle Mode: Dual -> Primary [" .. display_track_name(primary_track) .. "]"
 end
 
 local function apply_subtitle_mode(mode, silent)
@@ -262,17 +360,25 @@ local function apply_subtitle_mode(mode, silent)
 
     if mode == "off" then
         mp.set_property_bool("sub-visibility", false)
+        mp.set_property("secondary-sid", "no")
         mp.set_property_bool("secondary-sub-visibility", false)
     elseif mode == "primary" then
-        if mp.get_property("sid") == "no" then
+        primary_track = choose_primary_track()
+        if primary_track then
+            mp.set_property_number("sid", tonumber(primary_track.id))
+            mp.set_property_bool("sub-visibility", true)
+        elseif mp.get_property("sid") == "no" then
             mp.set_property("sid", "auto")
+            mp.set_property_bool("sub-visibility", true)
         end
+
         primary_track = find_track_by_id(mp.get_property_number("sid", -1)) or primary_track
         secondary_track = nil
-        mp.set_property_bool("sub-visibility", true)
+        mp.set_property("secondary-sid", "no")
         mp.set_property_bool("secondary-sub-visibility", false)
     else
         primary_track, secondary_track = choose_dual_tracks()
+
         if primary_track then
             mp.set_property_number("sid", tonumber(primary_track.id))
             mp.set_property_bool("sub-visibility", true)
@@ -300,12 +406,21 @@ end
 
 local function cycle_subtitle_mode()
     local current = current_subtitle_mode()
+
     if current == "primary" then
         apply_subtitle_mode("dual", false)
     elseif current == "dual" then
         apply_subtitle_mode("off", false)
     else
         apply_subtitle_mode("primary", false)
+    end
+end
+
+local function safe_cycle_subtitle_mode()
+    local ok, err = pcall(cycle_subtitle_mode)
+    if not ok then
+        mp.osd_message("Subtitle mode error: " .. tostring(err), 2.0)
+        mp.msg.error("subtitle mode error: " .. tostring(err))
     end
 end
 
@@ -328,9 +443,15 @@ mp.register_event("file-loaded", function()
     end
 
     mp.add_timeout(0.05, function()
-        apply_subtitle_mode(state.subtitle_mode, true)
+        local ok, err = pcall(function()
+            apply_subtitle_mode(state.subtitle_mode, true)
+        end)
+        if not ok then
+            mp.msg.error("subtitle restore error: " .. tostring(err))
+        end
     end)
 end)
 
 mp.register_event("shutdown", write_state)
-mp.add_key_binding(nil, "subtitle-mode-cycle", cycle_subtitle_mode)
+mp.add_key_binding(nil, "subtitle-mode-cycle", safe_cycle_subtitle_mode)
+mp.register_script_message("cycle-subtitle-mode", safe_cycle_subtitle_mode)
