@@ -1,0 +1,27 @@
+{
+  "last_check": "",
+  "auto_update": false,
+  "installed_apps": [
+    {
+      "app_name": "MPV",
+      "app_type": "app",
+      "install_method": "mpv-binary",
+      "install_path": "C:\\Users\\Satirtha\\AppData\\Roaming\\mpv",
+      "installed_date": "2026-04-19 14:00:26",
+      "app_version": "",
+      "update_available": false,
+      "ui_type": "modernz",
+      "managed": true
+    }
+  ],
+  "manager_in_path": false,
+  "manager_bin_path": "",
+  "install_path": "",
+  "mpv_config_path": "C:\\Users\\Satirtha\\AppData\\Roaming\\mpv\\portable_config",
+  "uosc_version": "",
+  "modernz_version": "0.3.2",
+  "ffmpeg_version": "20260418-d538a71ad",
+  "current_ui_type": "",
+  "create_manager_shortcut": false,
+  "hwa_decoder_preference": "vulkan,auto"
+}
