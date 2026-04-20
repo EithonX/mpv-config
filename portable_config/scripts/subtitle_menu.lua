@@ -27,6 +27,7 @@ local render_menu
 local last_click_targets = {}
 local last_line_height = 22
 local last_panel_width = 320
+local last_line_count = 0
 
 local function normalize_color(color, fallback)
     color = tostring(color or "")
@@ -730,7 +731,7 @@ render_menu = function()
             local right = current and "[ACTIVE]" or ""
             push_line(menu_line(choice.label, right, index == picker_index, choice.muted == true, current), function()
                 picker_index = index
-                apply_picker_selection()
+                render_menu()
             end)
         end
 
@@ -740,7 +741,7 @@ render_menu = function()
 
         push_line(divider_line())
         push_line(note_line("Up/Down browse  Enter apply  Right target"))
-        push_line(note_line("Left summary  Click select  Esc close"))
+        push_line(note_line("Click select  Enter apply  Esc close"))
     else
         local primary_value = mode == "off" and "Off" or display_track_name(primary)
         local primary_muted = mode == "off"
@@ -758,7 +759,6 @@ render_menu = function()
         push_line(divider_line())
         push_line(menu_line("Mode", "[" .. string.upper(mode) .. "]", selected_row == 1, false, true), function()
             selected_row = 1
-            cycle_mode(1)
             render_menu()
         end)
         push_line(note_line(mode_summary_text(mode, dual_available)))
@@ -770,7 +770,6 @@ render_menu = function()
             true
         ), function()
             selected_row = 2
-            cycle_smart(1)
             render_menu()
         end)
         push_line(note_line("Recommended tracks"))
@@ -788,11 +787,12 @@ render_menu = function()
         push_line(divider_line())
         push_line(note_line("Left/Right cycle Mode or Auto"))
         push_line(note_line("Left/Right/Enter open manual list"))
-        push_line(note_line("Click select  Esc close"))
+        push_line(note_line("Click select  Enter apply  Esc close"))
     end
 
     push_line(border_line())
     last_click_targets = click_targets
+    last_line_count = #lines
     last_line_height = math.max(18, body_size + 6)
     last_panel_width = math.floor((panel_chars() + 4) * math.max(7, body_size * 0.62))
 
@@ -904,6 +904,12 @@ local function bind_navigation_keys()
         local left = tonumber(options.left) or 36
         local top = tonumber(options.top) or 44
         if x < left or x > left + last_panel_width or y < top then
+            close_menu()
+            return
+        end
+
+        local total_height = last_line_count * last_line_height
+        if y > top + total_height then
             close_menu()
             return
         end

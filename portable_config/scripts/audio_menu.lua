@@ -24,6 +24,7 @@ local render_menu
 local last_click_targets = {}
 local last_line_height = 22
 local last_panel_width = 320
+local last_line_count = 0
 
 local function normalize_color(color, fallback)
     color = tostring(color or "")
@@ -387,7 +388,7 @@ render_menu = function()
             local right = current and "[ACTIVE]" or ""
             push_line(menu_line(choice.label, right, index == selected_index, choice.muted == true, current), function()
                 selected_index = index
-                apply_selection()
+                render_menu()
             end)
         end
 
@@ -397,11 +398,12 @@ render_menu = function()
 
         push_line(divider_line())
         push_line(note_line("Up/Down/Left/Right browse"))
-        push_line(note_line("Enter apply  Click select  Esc close"))
+        push_line(note_line("Click select  Enter apply  Esc close"))
     end
 
     push_line(border_line())
     last_click_targets = click_targets
+    last_line_count = #lines
     last_line_height = math.max(18, body_size + 6)
     last_panel_width = math.floor((panel_chars() + 4) * math.max(7, body_size * 0.62))
 
@@ -434,6 +436,12 @@ local function bind_navigation_keys()
         local left = tonumber(options.left) or 36
         local top = tonumber(options.top) or 44
         if x < left or x > left + last_panel_width or y < top then
+            close_menu()
+            return
+        end
+
+        local total_height = last_line_count * last_line_height
+        if y > top + total_height then
             close_menu()
             return
         end
