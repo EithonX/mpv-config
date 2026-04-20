@@ -15,8 +15,9 @@ local options = {
 require "mp.options".read_options(options, "subtitle_menu")
 
 local overlay = mp.create_osd_overlay("ass-events")
+local shared_state_path = "user-data/subtitle_auto/state"
 local menu_open = false
-local selected_row = 2
+local selected_row = 4
 local close_timer = nil
 
 local function normalize_color(color, fallback)
@@ -121,6 +122,14 @@ local function current_mode()
     end
 
     return "primary"
+end
+
+local function auto_state()
+    local shared = mp.get_property_native(shared_state_path)
+    if type(shared) ~= "table" then
+        return {}
+    end
+    return shared
 end
 
 local function clear_close_timer()
@@ -269,8 +278,26 @@ local function cycle_track_id(tracks, current_id, step, include_off, excluded_id
 end
 
 local function cycle_mode(step)
-    local modes = { "primary", "dual", "off" }
+    local tracks = subtitle_tracks()
+    if #tracks == 0 then
+        return
+    end
+
+    local modes = { "primary" }
     local current = current_mode()
+    local smart = auto_state()
+    local primary = find_track_by_id(mp.get_property_number("sid", -1), tracks)
+    local secondary = find_track_by_id(mp.get_property_number("secondary-sid", -1), tracks)
+    local has_manual_dual = current == "dual"
+        and primary
+        and secondary
+        and tonumber(primary.id) ~= tonumber(secondary.id)
+
+    if has_manual_dual or smart.smart_dual_available then
+        modes[#modes + 1] = "dual"
+    end
+
+    modes[#modes + 1] = "off"
     local current_index = 1
 
     for index, mode in ipairs(modes) do
@@ -349,6 +376,15 @@ local function build_track_line(label, value, active, muted)
         .. color_text(truncate_text(value), value_color, false)
 end
 
+local function build_action_line(label, value, active, unavailable)
+    local prefix = active and color_text("> ", accent_color, true) or color_text("  ", muted_color, false)
+    local label_color = active and accent_color or muted_color
+    local value_color = unavailable and muted_color or text_color
+    return prefix
+        .. color_text(label .. ": ", label_color, true)
+        .. color_text(truncate_text(value), value_color, false)
+end
+
 local function render_menu()
     if not menu_open then
         return
@@ -356,7 +392,8 @@ local function render_menu()
 
     local tracks = subtitle_tracks()
     local mode = current_mode()
-    local row_count = #tracks > 0 and 3 or 1
+    local smart = auto_state()
+    local row_count = #tracks > 0 and 5 or 1
     if selected_row > row_count then
         selected_row = row_count
     end
@@ -366,20 +403,31 @@ local function render_menu()
     local font_size = tonumber(options.font_size) or 16
     local help_size = math.max(12, font_size - 2)
     local body_size = math.max(12, font_size)
+    local audio_summary = tostring(smart.audio_summary or "Audio unknown")
+    local smart_primary_value = tostring(smart.smart_primary_label or "Unavailable")
+    local smart_dual_value = "Unavailable"
+    if smart.smart_dual_available then
+        smart_dual_value = tostring(smart.smart_dual_primary_label or "None")
+            .. " + "
+            .. tostring(smart.smart_dual_secondary_label or "None")
+    end
 
     local lines = {
         color_text("Subtitles", accent_color, true, body_size + 2)
-            .. color_text("  " .. tostring(#tracks) .. " track(s)", muted_color, false, help_size),
+            .. color_text("  " .. tostring(#tracks) .. " track(s)", muted_color, false, help_size)
+            .. color_text("  Audio: " .. truncate_text(audio_summary), muted_color, false, help_size),
     }
 
     if #tracks == 0 then
         lines[#lines + 1] = build_track_line("Status", "No subtitle tracks found", true, true)
         lines[#lines + 1] = color_text("Enter or Esc closes this menu.", muted_color, false, help_size)
     else
-        lines[#lines + 1] = build_mode_line(mode, selected_row == 1)
-        lines[#lines + 1] = build_track_line("Primary", display_track_name(primary), selected_row == 2, false)
-        lines[#lines + 1] = build_track_line("Secondary", display_track_name(secondary), selected_row == 3, mode ~= "dual")
-        lines[#lines + 1] = color_text("Up/Down select  Left/Right change  Enter/Esc close", muted_color, false, help_size)
+        lines[#lines + 1] = build_action_line("Auto Primary", smart_primary_value, selected_row == 1, not smart.smart_primary_available)
+        lines[#lines + 1] = build_action_line("Auto Dual", smart_dual_value, selected_row == 2, not smart.smart_dual_available)
+        lines[#lines + 1] = build_mode_line(mode, selected_row == 3)
+        lines[#lines + 1] = build_track_line("Primary", display_track_name(primary), selected_row == 4, false)
+        lines[#lines + 1] = build_track_line("Secondary", display_track_name(secondary), selected_row == 5, mode ~= "dual")
+        lines[#lines + 1] = color_text("Up/Down select  Left/Right change  Enter applies auto  Esc closes", muted_color, false, help_size)
     end
 
     local ass = string.format(
@@ -398,20 +446,40 @@ local function render_menu()
 end
 
 local function move_selection(step)
-    local row_count = #subtitle_tracks() > 0 and 3 or 1
+    local row_count = #subtitle_tracks() > 0 and 5 or 1
     selected_row = ((selected_row - 1 + step) % row_count) + 1
     render_menu()
 end
 
 local function change_value(step)
     if selected_row == 1 then
-        cycle_mode(step)
+        mp.commandv("script-message", "smart-select-subtitles", "primary")
     elseif selected_row == 2 then
+        mp.commandv("script-message", "smart-select-subtitles", "dual")
+    elseif selected_row == 3 then
+        cycle_mode(step)
+    elseif selected_row == 4 then
         cycle_primary(step)
     else
         cycle_secondary(step)
     end
     render_menu()
+end
+
+local function activate_selection()
+    if selected_row == 1 then
+        mp.commandv("script-message", "smart-select-subtitles", "primary")
+        render_menu()
+        return
+    end
+
+    if selected_row == 2 then
+        mp.commandv("script-message", "smart-select-subtitles", "dual")
+        render_menu()
+        return
+    end
+
+    close_menu()
 end
 
 local function bind_navigation_keys()
@@ -421,8 +489,8 @@ local function bind_navigation_keys()
     mp.add_forced_key_binding("RIGHT", "subtitle-menu-right", function() change_value(1) end, { repeatable = true })
     mp.add_forced_key_binding("WHEEL_UP", "subtitle-menu-wheel-up", function() move_selection(-1) end, { repeatable = true })
     mp.add_forced_key_binding("WHEEL_DOWN", "subtitle-menu-wheel-down", function() move_selection(1) end, { repeatable = true })
-    mp.add_forced_key_binding("ENTER", "subtitle-menu-enter", close_menu)
-    mp.add_forced_key_binding("KP_ENTER", "subtitle-menu-kp-enter", close_menu)
+    mp.add_forced_key_binding("ENTER", "subtitle-menu-enter", activate_selection)
+    mp.add_forced_key_binding("KP_ENTER", "subtitle-menu-kp-enter", activate_selection)
     mp.add_forced_key_binding("ESC", "subtitle-menu-escape", close_menu)
 end
 
@@ -433,7 +501,7 @@ local function open_menu()
     end
 
     menu_open = true
-    selected_row = #subtitle_tracks() > 0 and 2 or 1
+    selected_row = #subtitle_tracks() > 0 and 4 or 1
     bind_navigation_keys()
     render_menu()
 end
@@ -460,6 +528,9 @@ mp.observe_property("secondary-sub-visibility", "bool", function()
     render_menu()
 end)
 mp.observe_property("track-list", "native", function()
+    render_menu()
+end)
+mp.observe_property(shared_state_path, "native", function()
     render_menu()
 end)
 mp.register_event("file-loaded", close_menu)
