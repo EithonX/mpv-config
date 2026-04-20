@@ -1,11 +1,11 @@
 local mp = require "mp"
 
 local options = {
-    font = "Verdana",
+    font = "Consolas",
     font_size = 16,
     left = 36,
     top = 44,
-    max_label_length = 44,
+    panel_chars = 44,
     picker_rows = 8,
     timeout = 7,
     accent_color = "#FF8232",
@@ -24,6 +24,9 @@ local picker_kind = nil
 local picker_index = 1
 local close_timer = nil
 local render_menu
+local last_click_targets = {}
+local last_line_height = 22
+local last_panel_width = 320
 
 local function normalize_color(color, fallback)
     color = tostring(color or "")
@@ -53,17 +56,6 @@ local function escape_ass(text)
     text = text:gsub("}", "\\}")
     text = text:gsub("\n", " ")
     return text
-end
-
-local function truncate_text(text)
-    text = tostring(text or "")
-    if options.max_label_length <= 0 or #text <= options.max_label_length then
-        return text
-    end
-    if options.max_label_length <= 3 then
-        return text:sub(1, options.max_label_length)
-    end
-    return text:sub(1, options.max_label_length - 3) .. "..."
 end
 
 local function subtitle_tracks()
@@ -163,6 +155,7 @@ local function close_menu()
     mp.remove_key_binding("subtitle-menu-enter")
     mp.remove_key_binding("subtitle-menu-kp-enter")
     mp.remove_key_binding("subtitle-menu-escape")
+    mp.remove_key_binding("subtitle-menu-mouse-left")
 end
 
 local function reset_close_timer()
@@ -199,6 +192,12 @@ end
 
 local function set_primary_track(track_id)
     local tracks = subtitle_tracks()
+    if track_id == false then
+        mp.set_property_bool("sub-visibility", false)
+        disable_secondary()
+        return
+    end
+
     if #tracks == 0 then
         return
     end
@@ -252,43 +251,6 @@ local function set_secondary_track(track_id)
     end
 end
 
-local function cycle_track_id(tracks, current_id, step, include_off, excluded_id)
-    local choices = {}
-    if include_off then
-        choices[#choices + 1] = false
-    end
-
-    for _, track in ipairs(tracks) do
-        if tonumber(track.id) ~= tonumber(excluded_id) then
-            choices[#choices + 1] = tonumber(track.id)
-        end
-    end
-
-    if #choices == 0 then
-        return nil
-    end
-
-    local current_index = 1
-    local target_id = tonumber(current_id)
-    if include_off and not target_id then
-        current_index = 1
-    else
-        for index, choice in ipairs(choices) do
-            if choice == false and not target_id then
-                current_index = index
-                break
-            end
-            if choice ~= false and tonumber(choice) == target_id then
-                current_index = index
-                break
-            end
-        end
-    end
-
-    local next_index = ((current_index - 1 + step) % #choices) + 1
-    return choices[next_index]
-end
-
 local function cycle_mode(step)
     local tracks = subtitle_tracks()
     if #tracks == 0 then
@@ -323,37 +285,15 @@ local function cycle_mode(step)
     mp.commandv("script-message", "set-subtitle-mode", modes[next_index])
 end
 
-local function cycle_primary(step)
-    local tracks = subtitle_tracks()
-    if #tracks == 0 then
-        return
-    end
-
-    local primary = ensure_primary_track(tracks)
-    local next_id = cycle_track_id(tracks, primary and primary.id, step, false)
-    if next_id then
-        set_primary_track(next_id)
-    end
-end
-
-local function cycle_secondary(step)
-    local tracks = subtitle_tracks()
-    if #tracks < 2 then
-        return
-    end
-
-    local primary = ensure_primary_track(tracks)
-    local mode = current_mode()
-    local secondary = mode == "dual" and find_track_by_id(mp.get_property_number("secondary-sid", -1), tracks) or nil
-    local next_id = cycle_track_id(tracks, secondary and secondary.id, step, true, primary.id)
-    set_secondary_track(next_id)
-end
-
 local function current_track_id(kind, tracks)
     if kind == "secondary" then
         local mode = current_mode()
         local secondary = mode == "dual" and find_track_by_id(mp.get_property_number("secondary-sid", -1), tracks) or nil
         return secondary and tonumber(secondary.id) or false
+    end
+
+    if not mp.get_property_bool("sub-visibility") then
+        return false
     end
 
     local primary = ensure_primary_track(tracks)
@@ -384,6 +324,12 @@ local function picker_choices(kind, tracks)
 
         return choices
     end
+
+    choices[#choices + 1] = {
+        id = false,
+        label = "Off",
+        muted = true,
+    }
 
     for _, track in ipairs(tracks) do
         choices[#choices + 1] = {
@@ -498,21 +444,110 @@ local function color_text(text, color, bold, size)
     return "{" .. tags .. "}" .. escape_ass(text)
 end
 
-local function mode_token(label, active)
-    if active then
-        return color_text("[" .. label:upper() .. "]", accent_color, true)
-    end
-    return color_text(label, muted_color, false)
+local function compact_text(text)
+    return tostring(text or ""):gsub("%s+", " "):gsub("^%s*(.-)%s*$", "%1")
 end
 
-local function smart_token(label, active, available)
-    if not available then
-        return color_text(label, muted_color, false)
+local function panel_chars()
+    local value = tonumber(options.panel_chars)
+    if value and value >= 28 then
+        return math.floor(value)
+    end
+    return 44
+end
+
+local function fit_panel_text(text, width)
+    text = compact_text(text)
+    if width <= 0 then
+        return ""
+    end
+    if #text <= width then
+        return text
+    end
+    if width <= 3 then
+        return text:sub(1, width)
+    end
+    return text:sub(1, width - 3) .. "..."
+end
+
+local function join_columns(left, right, width)
+    left = compact_text(left)
+    right = compact_text(right)
+
+    if right == "" then
+        left = fit_panel_text(left, width)
+        return left .. string.rep(" ", width - #left)
+    end
+
+    right = fit_panel_text(right, width)
+    local gap = 2
+    local max_left = math.max(0, width - #right - gap)
+    left = fit_panel_text(left, max_left)
+    local spaces = math.max(gap, width - #left - #right)
+    return left .. string.rep(" ", spaces) .. right
+end
+
+local function frame_line(content, color, bold)
+    return color_text("| " .. content .. " |", color, bold)
+end
+
+local function border_line()
+    return color_text("+" .. string.rep("-", panel_chars() + 2) .. "+", accent_color, false)
+end
+
+local function divider_line()
+    return color_text("|" .. string.rep("-", panel_chars() + 2) .. "|", muted_color, false)
+end
+
+local function header_line(title, right)
+    return frame_line(join_columns(title, right, panel_chars()), accent_color, true)
+end
+
+local function menu_line(left, right, selected, muted, bold)
+    local marker = selected and "> " or "  "
+    local content = marker .. join_columns(compact_text(left), right or "", panel_chars() - #marker)
+    local color = muted and muted_color or text_color
+
+    if selected then
+        color = accent_color
+    end
+
+    return frame_line(content, color, bold or selected)
+end
+
+local function note_line(text)
+    return frame_line(join_columns(fit_panel_text(text, panel_chars()), "", panel_chars()), muted_color, false)
+end
+
+local function choice_token(label, active, available)
+    if available == false then
+        return "--"
     end
     if active then
-        return color_text("[" .. label:upper() .. "]", accent_color, true)
+        return "[" .. string.upper(label) .. "]"
     end
-    return color_text(label, text_color, false)
+    return label
+end
+
+local function mode_summary_text(mode, dual_available)
+    return table.concat({
+        choice_token("Primary", mode == "primary", true),
+        choice_token("Dual", mode == "dual", dual_available),
+        choice_token("Off", mode == "off", true),
+    }, " | ")
+end
+
+local function auto_status_text(kind, primary_available, dual_available)
+    if kind == "primary" then
+        return "[PRIMARY]"
+    end
+    if kind == "dual" then
+        return "[DUAL]"
+    end
+    if primary_available or dual_available then
+        return "READY"
+    end
+    return "NONE"
 end
 
 local function current_smart_kind(mode, primary, secondary, smart)
@@ -533,98 +568,6 @@ local function current_smart_kind(mode, primary, secondary, smart)
     end
 
     return nil
-end
-
-local function build_smart_line(active, smart_kind, primary_available, dual_available)
-    local prefix = active and color_text("> ", accent_color, true) or color_text("  ", muted_color, false)
-    local label = color_text("Smart ", active and accent_color or muted_color, true)
-    return prefix
-        .. label
-        .. smart_token("Primary", smart_kind == "primary", primary_available)
-        .. color_text("  ", muted_color, false)
-        .. smart_token("Dual", smart_kind == "dual", dual_available)
-end
-
-local function build_mode_line(mode, active)
-    local prefix = active and color_text("> ", accent_color, true) or color_text("  ", muted_color, false)
-    local label = color_text("Mode ", active and accent_color or muted_color, true)
-    return prefix
-        .. label
-        .. mode_token("Primary", mode == "primary")
-        .. color_text("  ", muted_color, false)
-        .. mode_token("Dual", mode == "dual")
-        .. color_text("  ", muted_color, false)
-        .. mode_token("Off", mode == "off")
-end
-
-local function build_track_line(label, value, active, muted)
-    local prefix = active and color_text("> ", accent_color, true) or color_text("  ", muted_color, false)
-    local label_color = active and accent_color or muted_color
-    local value_color = muted and muted_color or text_color
-    return prefix
-        .. color_text(label .. ": ", label_color, true)
-        .. color_text(truncate_text(value), value_color, false)
-end
-
-local function build_section_line(label, size)
-    return color_text(label, muted_color, true, size)
-end
-
-local function build_picker_line(label, active, current, muted)
-    local prefix = active and color_text("> ", accent_color, true) or color_text("  ", muted_color, false)
-    local value_color = muted and muted_color or text_color
-    local value_bold = active or current
-    local suffix = current and color_text("  active", active and accent_color or muted_color, false) or ""
-
-    if active then
-        value_color = accent_color
-    elseif current then
-        value_color = text_color
-    end
-
-    return prefix
-        .. color_text(truncate_text(label), value_color, value_bold)
-        .. suffix
-end
-
-local function picker_target_token(label, active)
-    if active then
-        return color_text("[" .. label:upper() .. "]", accent_color, true)
-    end
-    return color_text(label, muted_color, false)
-end
-
-local function build_picker_target_line()
-    local prefix = color_text("  ", muted_color, false)
-    local label = color_text("Target ", muted_color, true)
-    return prefix
-        .. label
-        .. picker_target_token("Primary", picker_kind == "primary")
-        .. color_text("  ", muted_color, false)
-        .. picker_target_token("Secondary", picker_kind == "secondary")
-end
-
-local function build_meta_summary(track_count, smart)
-    if track_count <= 0 then
-        return "No subtitle tracks"
-    end
-
-    local parts = {
-        tostring(track_count) .. (track_count == 1 and " track" or " tracks"),
-    }
-
-    local audio_summary = tostring(smart.audio_summary or "")
-    if audio_summary ~= "" then
-        parts[#parts + 1] = audio_summary
-    end
-
-    if track_count == 1 then
-        parts[#parts + 1] = "primary/off only"
-    elseif smart.smart_dual_available then
-        parts[#parts + 1] = "smart dual ready"
-    end
-
-    return truncate_text(table.concat(parts, " | "))
 end
 
 local function smart_primary_available(tracks, smart)
@@ -744,45 +687,63 @@ render_menu = function()
     local font_size = tonumber(options.font_size) or 16
     local help_size = math.max(12, font_size - 2)
     local body_size = math.max(12, font_size)
+    local subtitle_count_label = tostring(#tracks) .. (#tracks == 1 and " track" or " tracks")
+    local dual_available = #tracks > 1 and ((mode == "dual" and secondary ~= nil) or smart.smart_dual_available == true)
 
-    local lines = {
-        color_text("Subtitles", accent_color, true, body_size + 2)
-            .. color_text("  " .. build_meta_summary(#tracks, smart), muted_color, false, help_size),
-    }
+    local lines = {}
+    local click_targets = {}
+    local function push_line(text, action)
+        lines[#lines + 1] = text
+        click_targets[#lines] = action
+    end
+
+    push_line(border_line())
 
     if #tracks == 0 then
-        lines[#lines + 1] = build_track_line("Status", "No subtitle tracks found", true, true)
-        lines[#lines + 1] = color_text("Enter or Esc closes this menu.", muted_color, false, help_size)
+        push_line(header_line("SUBTITLES", "none"))
+        push_line(divider_line())
+        push_line(menu_line("No subtitle tracks", "", false, true, false))
+        push_line(divider_line())
+        push_line(note_line("Esc close"))
     elseif picker_kind then
         local choices = picker_choices(picker_kind, tracks)
         local first_index, last_index = picker_window(#choices)
-        local picker_title = "Manual Subtitle Tracks"
+        local picker_title = "MANUAL SUBTITLES"
         local active_id = current_track_id(picker_kind, tracks)
 
-        lines[#lines + 1] = color_text(picker_title, accent_color, true, body_size)
-        lines[#lines + 1] = build_picker_target_line()
+        push_line(header_line(picker_title, string.upper(picker_kind)))
+        push_line(divider_line())
 
         if picker_kind == "secondary" then
-            lines[#lines + 1] = build_track_line("Primary", display_track_name(primary), false, false)
+            push_line(menu_line("Primary", display_track_name(primary), false, false, true))
+            push_line(divider_line())
         end
 
-        lines[#lines + 1] = color_text("Up/Down browse  Enter applies  Right switches target  Left summary  Esc closes", muted_color, false, help_size)
-
         if first_index > 1 then
-            lines[#lines + 1] = color_text("  ...", muted_color, false, help_size)
+            push_line(menu_line("...", "", false, true, false))
         end
 
         for index = first_index, last_index do
             local choice = choices[index]
             local current = (choice.id == false and active_id == false)
                 or (choice.id ~= false and tonumber(choice.id) == tonumber(active_id))
-            lines[#lines + 1] = build_picker_line(choice.label, index == picker_index, current, choice.muted == true)
+            local right = current and "[ACTIVE]" or ""
+            push_line(menu_line(choice.label, right, index == picker_index, choice.muted == true, current), function()
+                picker_index = index
+                apply_picker_selection()
+            end)
         end
 
         if last_index < #choices then
-            lines[#lines + 1] = color_text("  ...", muted_color, false, help_size)
+            push_line(menu_line("...", "", false, true, false))
         end
+
+        push_line(divider_line())
+        push_line(note_line("Up/Down browse  Enter apply  Right target"))
+        push_line(note_line("Left summary  Click select  Esc close"))
     else
+        local primary_value = mode == "off" and "Off" or display_track_name(primary)
+        local primary_muted = mode == "off"
         local secondary_value = "Off"
         local secondary_muted = mode ~= "dual"
         if #tracks < 2 then
@@ -793,14 +754,47 @@ render_menu = function()
             secondary_muted = false
         end
 
-        lines[#lines + 1] = build_section_line("Quick", help_size)
-        lines[#lines + 1] = build_mode_line(mode, selected_row == 1)
-        lines[#lines + 1] = build_smart_line(selected_row == 2, smart_kind, smart_primary_available(tracks, smart), smart_dual_available(tracks, smart))
-        lines[#lines + 1] = build_section_line("Manual", help_size)
-        lines[#lines + 1] = build_track_line("Primary", display_track_name(primary), selected_row == 3, false)
-        lines[#lines + 1] = build_track_line("Secondary", secondary_value, selected_row == 4, secondary_muted)
-        lines[#lines + 1] = color_text("Left/Right quick change Mode/Smart  Enter opens manual list  Esc closes", muted_color, false, help_size)
+        push_line(header_line("SUBTITLES", subtitle_count_label))
+        push_line(divider_line())
+        push_line(menu_line("Mode", "[" .. string.upper(mode) .. "]", selected_row == 1, false, true), function()
+            selected_row = 1
+            cycle_mode(1)
+            render_menu()
+        end)
+        push_line(note_line(mode_summary_text(mode, dual_available)))
+        push_line(menu_line(
+            "Auto",
+            auto_status_text(smart_kind, smart_primary_available(tracks, smart), smart_dual_available(tracks, smart)),
+            selected_row == 2,
+            not smart_primary_available(tracks, smart) and not smart_dual_available(tracks, smart),
+            true
+        ), function()
+            selected_row = 2
+            cycle_smart(1)
+            render_menu()
+        end)
+        push_line(note_line("Recommended tracks"))
+        push_line(divider_line())
+        push_line(menu_line("Primary", primary_value, selected_row == 3, primary_muted, true), function()
+            selected_row = 3
+            open_picker("primary")
+            render_menu()
+        end)
+        push_line(menu_line("Secondary", secondary_value, selected_row == 4, secondary_muted, true), function()
+            selected_row = 4
+            open_picker("secondary")
+            render_menu()
+        end)
+        push_line(divider_line())
+        push_line(note_line("Left/Right cycle Mode or Auto"))
+        push_line(note_line("Left/Right/Enter open manual list"))
+        push_line(note_line("Click select  Esc close"))
     end
+
+    push_line(border_line())
+    last_click_targets = click_targets
+    last_line_height = math.max(18, body_size + 6)
+    last_panel_width = math.floor((panel_chars() + 4) * math.max(7, body_size * 0.62))
 
     local ass = string.format(
         "{\\an7\\pos(%d,%d)%s\\fs%d\\bord1\\shad0\\3c&H%s&}",
@@ -851,10 +845,8 @@ local function change_value(step)
     elseif selected_row == 2 then
         cycle_smart(step)
     elseif selected_row == 3 then
-        if step > 0 then
-            open_picker("primary")
-        end
-    elseif step > 0 then
+        open_picker("primary")
+    elseif selected_row == 4 then
         open_picker("secondary")
     end
     render_menu()
@@ -903,6 +895,27 @@ local function bind_navigation_keys()
     mp.add_forced_key_binding("DOWN", "subtitle-menu-down", function() move_selection(1) end, { repeatable = true })
     mp.add_forced_key_binding("LEFT", "subtitle-menu-left", function() change_value(-1) end, { repeatable = true })
     mp.add_forced_key_binding("RIGHT", "subtitle-menu-right", function() change_value(1) end, { repeatable = true })
+    mp.add_forced_key_binding("MBTN_LEFT", "subtitle-menu-mouse-left", function()
+        local x, y = mp.get_mouse_pos()
+        if not x or not y then
+            return
+        end
+
+        local left = tonumber(options.left) or 36
+        local top = tonumber(options.top) or 44
+        if x < left or x > left + last_panel_width or y < top then
+            close_menu()
+            return
+        end
+
+        local line_index = math.floor((y - top) / last_line_height) + 1
+        local action = last_click_targets[line_index]
+        if action then
+            action()
+        else
+            close_menu()
+        end
+    end)
     mp.add_forced_key_binding("WHEEL_UP", "subtitle-menu-wheel-up", function() move_selection(-1) end, { repeatable = true })
     mp.add_forced_key_binding("WHEEL_DOWN", "subtitle-menu-wheel-down", function() move_selection(1) end, { repeatable = true })
     mp.add_forced_key_binding("ENTER", "subtitle-menu-enter", activate_selection)
@@ -916,6 +929,7 @@ local function open_menu()
         return
     end
 
+    mp.commandv("script-message", "audio-menu-close")
     menu_open = true
     close_picker()
     selected_row = 1

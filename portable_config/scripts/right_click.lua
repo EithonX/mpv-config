@@ -12,6 +12,7 @@ end
 
 local function open_menu()
     mp.commandv("script-message", "subtitle-menu-close")
+    mp.commandv("script-message", "audio-menu-close")
     mp.commandv("script-binding", "select/menu")
 end
 
