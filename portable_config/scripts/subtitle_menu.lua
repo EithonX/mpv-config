@@ -18,7 +18,7 @@ require "mp.options".read_options(options, "subtitle_menu")
 local overlay = mp.create_osd_overlay("ass-events")
 local shared_state_path = "user-data/subtitle_auto/state"
 local menu_open = false
-local selected_row = 4
+local selected_row = 3
 local close_timer = nil
 
 local function normalize_color(color, fallback)
@@ -357,6 +357,46 @@ local function mode_token(label, active)
     return color_text(label, muted_color, false)
 end
 
+local function smart_token(label, active, available)
+    if not available then
+        return color_text(label, muted_color, false)
+    end
+    if active then
+        return color_text("[" .. label:upper() .. "]", accent_color, true)
+    end
+    return color_text(label, text_color, false)
+end
+
+local function current_smart_kind(mode, primary, secondary, smart)
+    if smart.smart_dual_available
+        and mode == "dual"
+        and primary
+        and secondary
+        and tonumber(primary.id) == tonumber(smart.smart_dual_primary_id)
+        and tonumber(secondary.id) == tonumber(smart.smart_dual_secondary_id) then
+        return "dual"
+    end
+
+    if smart.smart_primary_available
+        and mode == "primary"
+        and primary
+        and tonumber(primary.id) == tonumber(smart.smart_primary_id) then
+        return "primary"
+    end
+
+    return nil
+end
+
+local function build_smart_line(active, smart_kind, primary_available, dual_available)
+    local prefix = active and color_text("> ", accent_color, true) or color_text("  ", muted_color, false)
+    local label = color_text("Smart ", active and accent_color or muted_color, true)
+    return prefix
+        .. label
+        .. smart_token("Primary", smart_kind == "primary", primary_available)
+        .. color_text("  ", muted_color, false)
+        .. smart_token("Dual", smart_kind == "dual", dual_available)
+end
+
 local function build_mode_line(mode, active)
     local prefix = active and color_text("> ", accent_color, true) or color_text("  ", muted_color, false)
     local label = color_text("Mode ", active and accent_color or muted_color, true)
@@ -373,15 +413,6 @@ local function build_track_line(label, value, active, muted)
     local prefix = active and color_text("> ", accent_color, true) or color_text("  ", muted_color, false)
     local label_color = active and accent_color or muted_color
     local value_color = muted and muted_color or text_color
-    return prefix
-        .. color_text(label .. ": ", label_color, true)
-        .. color_text(truncate_text(value), value_color, false)
-end
-
-local function build_action_line(label, value, active, unavailable)
-    local prefix = active and color_text("> ", accent_color, true) or color_text("  ", muted_color, false)
-    local label_color = active and accent_color or muted_color
-    local value_color = unavailable and muted_color or text_color
     return prefix
         .. color_text(label .. ": ", label_color, true)
         .. color_text(truncate_text(value), value_color, false)
@@ -442,6 +473,48 @@ local function apply_auto_selection(kind)
     return true
 end
 
+local function cycle_smart(step)
+    local tracks = subtitle_tracks()
+    local smart = auto_state()
+    local choices = {}
+
+    if smart_primary_available(tracks, smart) then
+        choices[#choices + 1] = "primary"
+    end
+    if smart_dual_available(tracks, smart) then
+        choices[#choices + 1] = "dual"
+    end
+
+    if #choices == 0 then
+        mp.osd_message("No smart subtitle choice available", 1.2)
+        return
+    end
+
+    local mode = current_mode()
+    local primary = ensure_primary_track(tracks)
+    local secondary = mode == "dual" and find_track_by_id(mp.get_property_number("secondary-sid", -1), tracks) or nil
+    local current_kind = current_smart_kind(mode, primary, secondary, smart)
+    local current_index = nil
+
+    for index, choice in ipairs(choices) do
+        if choice == current_kind then
+            current_index = index
+            break
+        end
+    end
+
+    local next_index
+    if current_index then
+        next_index = ((current_index - 1 + step) % #choices) + 1
+    elseif step >= 0 then
+        next_index = 1
+    else
+        next_index = #choices
+    end
+
+    apply_auto_selection(choices[next_index])
+end
+
 local function render_menu()
     if not menu_open then
         return
@@ -450,13 +523,14 @@ local function render_menu()
     local tracks = subtitle_tracks()
     local mode = current_mode()
     local smart = auto_state()
-    local row_count = #tracks > 0 and 5 or 1
+    local row_count = #tracks > 0 and 4 or 1
     if selected_row > row_count then
         selected_row = row_count
     end
 
     local primary = #tracks > 0 and ensure_primary_track(tracks) or nil
     local secondary = mode == "dual" and find_track_by_id(mp.get_property_number("secondary-sid", -1), tracks) or nil
+    local smart_kind = current_smart_kind(mode, primary, secondary, smart)
     local font_size = tonumber(options.font_size) or 16
     local help_size = math.max(12, font_size - 2)
     local body_size = math.max(12, font_size)
@@ -470,21 +544,6 @@ local function render_menu()
         lines[#lines + 1] = build_track_line("Status", "No subtitle tracks found", true, true)
         lines[#lines + 1] = color_text("Enter or Esc closes this menu.", muted_color, false, help_size)
     else
-        local smart_primary_value = smart_primary_available(tracks, smart)
-            and tostring(smart.smart_primary_label or "Unavailable")
-            or "Unavailable"
-
-        local smart_dual_value
-        if #tracks < 2 then
-            smart_dual_value = "Need 2 tracks"
-        elseif smart_dual_available(tracks, smart) then
-            smart_dual_value = tostring(smart.smart_dual_primary_label or "None")
-                .. " + "
-                .. tostring(smart.smart_dual_secondary_label or "None")
-        else
-            smart_dual_value = "No clean pair detected"
-        end
-
         local secondary_value = "Off"
         local secondary_muted = mode ~= "dual"
         if #tracks < 2 then
@@ -495,12 +554,11 @@ local function render_menu()
             secondary_muted = false
         end
 
-        lines[#lines + 1] = build_action_line("Auto Primary", smart_primary_value, selected_row == 1, not smart_primary_available(tracks, smart))
-        lines[#lines + 1] = build_action_line("Auto Dual", smart_dual_value, selected_row == 2, not smart_dual_available(tracks, smart))
-        lines[#lines + 1] = build_mode_line(mode, selected_row == 3)
-        lines[#lines + 1] = build_track_line("Primary", display_track_name(primary), selected_row == 4, false)
-        lines[#lines + 1] = build_track_line("Secondary", secondary_value, selected_row == 5, secondary_muted)
-        lines[#lines + 1] = color_text("Up/Down select  Left/Right change  Enter applies auto  Esc closes", muted_color, false, help_size)
+        lines[#lines + 1] = build_smart_line(selected_row == 1, smart_kind, smart_primary_available(tracks, smart), smart_dual_available(tracks, smart))
+        lines[#lines + 1] = build_mode_line(mode, selected_row == 2)
+        lines[#lines + 1] = build_track_line("Primary", display_track_name(primary), selected_row == 3, false)
+        lines[#lines + 1] = build_track_line("Secondary", secondary_value, selected_row == 4, secondary_muted)
+        lines[#lines + 1] = color_text("Up/Down select  Left/Right change  Enter or Esc closes", muted_color, false, help_size)
     end
 
     local ass = string.format(
@@ -519,19 +577,17 @@ local function render_menu()
 end
 
 local function move_selection(step)
-    local row_count = #subtitle_tracks() > 0 and 5 or 1
+    local row_count = #subtitle_tracks() > 0 and 4 or 1
     selected_row = ((selected_row - 1 + step) % row_count) + 1
     render_menu()
 end
 
 local function change_value(step)
     if selected_row == 1 then
-        apply_auto_selection("primary")
+        cycle_smart(step)
     elseif selected_row == 2 then
-        apply_auto_selection("dual")
-    elseif selected_row == 3 then
         cycle_mode(step)
-    elseif selected_row == 4 then
+    elseif selected_row == 3 then
         cycle_primary(step)
     else
         cycle_secondary(step)
@@ -540,18 +596,6 @@ local function change_value(step)
 end
 
 local function activate_selection()
-    if selected_row == 1 then
-        apply_auto_selection("primary")
-        render_menu()
-        return
-    end
-
-    if selected_row == 2 then
-        apply_auto_selection("dual")
-        render_menu()
-        return
-    end
-
     close_menu()
 end
 
@@ -574,7 +618,7 @@ local function open_menu()
     end
 
     menu_open = true
-    selected_row = #subtitle_tracks() > 0 and 4 or 1
+    selected_row = #subtitle_tracks() > 0 and 3 or 1
     bind_navigation_keys()
     render_menu()
 end
