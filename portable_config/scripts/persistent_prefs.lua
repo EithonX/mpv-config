@@ -2,9 +2,9 @@ local mp = require "mp"
 local utils = require "mp.utils"
 
 local state_path = mp.command_native({ "expand-path", "~~/script-opts/persistent_prefs.json" })
+local default_subtitle_mode = "primary"
 local state = {
     volume = nil,
-    subtitle_mode = "dual",
 }
 
 local signs_keywords = {
@@ -114,9 +114,6 @@ local function read_state()
         state.volume = round(parsed.volume, 0)
     end
 
-    if valid_mode(parsed.subtitle_mode) then
-        state.subtitle_mode = parsed.subtitle_mode
-    end
 end
 
 local function write_state()
@@ -300,11 +297,6 @@ local function choose_regular_primary()
 end
 
 local function choose_primary_track()
-    local anime_primary = choose_anime_dual_pair()
-    if anime_primary then
-        return anime_primary
-    end
-
     return choose_regular_primary()
 end
 
@@ -352,7 +344,7 @@ end
 
 local function apply_subtitle_mode(mode, silent)
     if not valid_mode(mode) then
-        mode = "dual"
+        mode = default_subtitle_mode
     end
 
     local primary_track = find_track_by_id(mp.get_property_number("sid", -1))
@@ -396,9 +388,6 @@ local function apply_subtitle_mode(mode, silent)
         end
     end
 
-    state.subtitle_mode = mode
-    write_state()
-
     if not silent then
         mp.osd_message(status_message_for(mode, primary_track, secondary_track), 2.0)
     end
@@ -418,6 +407,16 @@ end
 
 local function safe_cycle_subtitle_mode()
     local ok, err = pcall(cycle_subtitle_mode)
+    if not ok then
+        mp.osd_message("Subtitle mode error: " .. tostring(err), 2.0)
+        mp.msg.error("subtitle mode error: " .. tostring(err))
+    end
+end
+
+local function safe_set_subtitle_mode(mode)
+    local ok, err = pcall(function()
+        apply_subtitle_mode(mode, false)
+    end)
     if not ok then
         mp.osd_message("Subtitle mode error: " .. tostring(err), 2.0)
         mp.msg.error("subtitle mode error: " .. tostring(err))
@@ -444,7 +443,7 @@ mp.register_event("file-loaded", function()
 
     mp.add_timeout(0.05, function()
         local ok, err = pcall(function()
-            apply_subtitle_mode(state.subtitle_mode, true)
+            apply_subtitle_mode(default_subtitle_mode, true)
         end)
         if not ok then
             mp.msg.error("subtitle restore error: " .. tostring(err))
@@ -455,3 +454,4 @@ end)
 mp.register_event("shutdown", write_state)
 mp.add_key_binding(nil, "subtitle-mode-cycle", safe_cycle_subtitle_mode)
 mp.register_script_message("cycle-subtitle-mode", safe_cycle_subtitle_mode)
+mp.register_script_message("set-subtitle-mode", safe_set_subtitle_mode)
