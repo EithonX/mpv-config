@@ -11,6 +11,7 @@ local function clear_timer()
 end
 
 local function open_menu()
+    mp.commandv("script-message", "subtitle-menu-close")
     mp.commandv("script-binding", "select/menu")
 end
 
@@ -18,7 +19,9 @@ local function right_click_single()
     if mp.get_time() < suppress_single_until then
         return
     end
-    clear_timer()
+    if timer then
+        return
+    end
     timer = mp.add_timeout(delay, function()
         timer = nil
         open_menu()

@@ -41,16 +41,34 @@ local dialogue_phrases = {
     "dialog",
     "dialogue only",
     "dialog only",
+    "dialogue and songs",
+    "full dialogue",
+    "main dialogue",
     "full",
     "full subtitle",
     "full subtitles",
     "full sub",
     "full subs",
+    "english sub",
+    "english subs",
     "translation",
     "translated",
     "official",
     "retail",
     "english subtitles",
+}
+
+local forced_phrases = {
+    "forced",
+    "forced only",
+    "foreign parts",
+    "foreign dialogue",
+    "foreign language",
+    "foreign only",
+    "non english",
+    "non english only",
+    "only foreign",
+    "parts only",
 }
 
 local sdh_phrases = {
@@ -81,9 +99,10 @@ local commentary_phrases = {
     "notes",
 }
 
-local japanese_audio_phrases = {
+local original_audio_phrases = {
     "japanese",
     "original",
+    "original audio",
 }
 
 local function round(value, digits)
@@ -288,7 +307,8 @@ local function analyze_audio(track)
     }, " "))
 
     local english = lang == "en" or lang == "eng" or has_phrase(meta_text, "english")
-    local japanese = lang == "ja" or lang == "jpn" or has_any_phrase(meta_text, japanese_audio_phrases)
+    local original = lang == "ja" or lang == "jpn" or has_any_phrase(meta_text, original_audio_phrases)
+    local named_language = lang ~= "" and lang ~= "und" and lang ~= "zxx"
     local commentary = has_any_phrase(title_text, commentary_phrases)
 
     local preference = "unknown"
@@ -301,12 +321,12 @@ local function analyze_audio(track)
     elseif english then
         preference = "english"
         summary = "English dub"
-    elseif japanese then
-        preference = "japanese"
-        summary = "Japanese/original"
     elseif has_phrase(meta_text, "dub") then
         preference = "english"
         summary = "Dub audio"
+    elseif original or named_language then
+        preference = "original"
+        summary = "Original/foreign audio"
     end
 
     return {
@@ -346,7 +366,7 @@ local function analyze_subtitle_track(track)
         end
     end
 
-    local forced = track and track.forced or false
+    local forced = (track and track.forced == true) or has_any_phrase(label_text, forced_phrases)
     local hearing_impaired = (track and track["hearing-impaired"] == true) or has_any_phrase(label_text, sdh_phrases) or has_token(label_text, "cc")
     local commentary = has_any_phrase(label_text, commentary_phrases)
     local dubtitle = has_any_phrase(label_text, dubtitle_phrases)
