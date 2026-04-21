@@ -558,7 +558,7 @@ render_menu = function()
         end
 
         footer = {
-            "Arrows only move the cursor",
+            "Up/Down move | Left back",
             "Enter or Click applies | Esc back",
         }
 
@@ -627,8 +627,8 @@ render_menu = function()
     }
 
     footer = {
-        "Arrows only move the cursor",
-        "Enter opens/applies | Esc closes",
+        "Up/Down move | Right opens",
+        "Enter applies in submenu | Esc closes",
     }
 
     ui:render({
@@ -651,12 +651,7 @@ local function move_selection(step)
     render_menu()
 end
 
-local function activate_selection()
-    if picker_kind then
-        apply_picker_selection(true)
-        return
-    end
-
+local function open_selected_picker()
     if #subtitle_tracks() == 0 then
         close_menu()
         return
@@ -673,6 +668,15 @@ local function activate_selection()
     render_menu()
 end
 
+local function activate_selection()
+    if picker_kind then
+        apply_picker_selection(true)
+        return
+    end
+
+    reset_close_timer()
+end
+
 local function escape_menu()
     if picker_kind then
         close_picker()
@@ -683,11 +687,30 @@ local function escape_menu()
     close_menu()
 end
 
+local function enter_submenu()
+    if picker_kind then
+        reset_close_timer()
+        return
+    end
+
+    open_selected_picker()
+end
+
+local function leave_submenu()
+    if picker_kind then
+        close_picker()
+        render_menu()
+        return
+    end
+
+    reset_close_timer()
+end
+
 local function bind_navigation_keys()
     mp.add_forced_key_binding("UP", "subtitle-menu-up", function() move_selection(-1) end, { repeatable = true })
     mp.add_forced_key_binding("DOWN", "subtitle-menu-down", function() move_selection(1) end, { repeatable = true })
-    mp.add_forced_key_binding("LEFT", "subtitle-menu-left", function() move_selection(-1) end, { repeatable = true })
-    mp.add_forced_key_binding("RIGHT", "subtitle-menu-right", function() move_selection(1) end, { repeatable = true })
+    mp.add_forced_key_binding("LEFT", "subtitle-menu-left", leave_submenu, { repeatable = true })
+    mp.add_forced_key_binding("RIGHT", "subtitle-menu-right", enter_submenu, { repeatable = true })
     mp.add_forced_key_binding("MBTN_LEFT", "subtitle-menu-mouse-left", function()
         local x, y = mp.get_mouse_pos()
         if not x or not y then
