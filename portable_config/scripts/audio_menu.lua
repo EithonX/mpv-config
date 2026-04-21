@@ -1,5 +1,7 @@
 local mp = require "mp"
 
+local menu_ui = dofile(mp.command_native({ "expand-path", "~~/scripts/menu_ui.lua" }))
+
 local options = {
     font = "Consolas",
     font_size = 16,
@@ -12,134 +14,22 @@ local options = {
     text_color = "#FFFFFF",
     muted_color = "#A8A8A8",
     shadow_color = "#111111",
+    panel_color = "#121212",
+    surface_color = "#1E1E1E",
+    selection_color = "#362217",
 }
 
 require "mp.options".read_options(options, "audio_menu")
 
 local overlay = mp.create_osd_overlay("ass-events")
+local ui = menu_ui.new(overlay, options)
 local menu_open = false
 local selected_index = 1
 local close_timer = nil
 local render_menu
-local last_click_targets = {}
-local last_line_height = 22
-local last_panel_width = 320
-local last_line_count = 0
-
-local function normalize_color(color, fallback)
-    color = tostring(color or "")
-    if color:find("^#%x%x%x%x%x%x$") == nil then
-        color = fallback
-    end
-    return color:sub(6, 7) .. color:sub(4, 5) .. color:sub(2, 3)
-end
-
-local accent_color = normalize_color(options.accent_color, "#FF8232")
-local text_color = normalize_color(options.text_color, "#FFFFFF")
-local muted_color = normalize_color(options.muted_color, "#A8A8A8")
-local shadow_color = normalize_color(options.shadow_color, "#111111")
-
-local function font_tag()
-    local font = tostring(options.font or ""):gsub("[{}\\]", "")
-    if font == "" then
-        return ""
-    end
-    return "\\fn" .. font
-end
-
-local function escape_ass(text)
-    text = tostring(text or "")
-    text = text:gsub("\\", "\\\\")
-    text = text:gsub("{", "\\{")
-    text = text:gsub("}", "\\}")
-    text = text:gsub("\n", " ")
-    return text
-end
-
-local function color_text(text, color, bold, size)
-    local tags = "\\1c&H" .. color .. "&"
-    if bold then
-        tags = tags .. "\\b1"
-    end
-    if size then
-        tags = tags .. "\\fs" .. tostring(size)
-    end
-    return "{" .. tags .. "}" .. escape_ass(text)
-end
 
 local function compact_text(text)
     return tostring(text or ""):gsub("%s+", " "):gsub("^%s*(.-)%s*$", "%1")
-end
-
-local function panel_chars()
-    local value = tonumber(options.panel_chars)
-    if value and value >= 28 then
-        return math.floor(value)
-    end
-    return 44
-end
-
-local function fit_panel_text(text, width)
-    text = compact_text(text)
-    if width <= 0 then
-        return ""
-    end
-    if #text <= width then
-        return text
-    end
-    if width <= 3 then
-        return text:sub(1, width)
-    end
-    return text:sub(1, width - 3) .. "..."
-end
-
-local function join_columns(left, right, width)
-    left = compact_text(left)
-    right = compact_text(right)
-
-    if right == "" then
-        left = fit_panel_text(left, width)
-        return left .. string.rep(" ", width - #left)
-    end
-
-    right = fit_panel_text(right, width)
-    local gap = 2
-    local max_left = math.max(0, width - #right - gap)
-    left = fit_panel_text(left, max_left)
-    local spaces = math.max(gap, width - #left - #right)
-    return left .. string.rep(" ", spaces) .. right
-end
-
-local function frame_line(content, color, bold)
-    return color_text("| " .. content .. " |", color, bold)
-end
-
-local function border_line()
-    return color_text("+" .. string.rep("-", panel_chars() + 2) .. "+", accent_color, false)
-end
-
-local function divider_line()
-    return color_text("|" .. string.rep("-", panel_chars() + 2) .. "|", muted_color, false)
-end
-
-local function header_line(title, right)
-    return frame_line(join_columns(title, right, panel_chars()), accent_color, true)
-end
-
-local function menu_line(left, right, selected, muted, bold)
-    local marker = selected and "> " or "  "
-    local content = marker .. join_columns(compact_text(left), right or "", panel_chars() - #marker)
-    local color = muted and muted_color or text_color
-
-    if selected then
-        color = accent_color
-    end
-
-    return frame_line(content, color, bold or selected)
-end
-
-local function note_line(text)
-    return frame_line(join_columns(fit_panel_text(text, panel_chars()), "", panel_chars()), muted_color, false)
 end
 
 local function audio_tracks()
@@ -292,7 +182,7 @@ end
 local function close_menu()
     clear_close_timer()
     menu_open = false
-    overlay:remove()
+    ui:clear()
     mp.remove_key_binding("audio-menu-up")
     mp.remove_key_binding("audio-menu-down")
     mp.remove_key_binding("audio-menu-left")
@@ -323,11 +213,15 @@ local function move_selection(step)
     render_menu()
 end
 
-local function apply_selection()
+local function apply_selection(index)
     local tracks = audio_tracks()
     local choices = audio_choices(tracks)
-    local choice = choices[selected_index]
 
+    if index then
+        selected_index = index
+    end
+
+    local choice = choices[selected_index]
     if not choice then
         close_menu()
         return
@@ -354,71 +248,62 @@ render_menu = function()
 
     local choices = audio_choices(tracks)
     local first_index, last_index = picker_window(#choices)
-    local font_size = tonumber(options.font_size) or 16
-    local body_size = math.max(12, font_size)
-    local track_count_label = tostring(#tracks) .. (#tracks == 1 and " track" or " tracks")
     local active_id = current_choice_id(tracks)
-    local lines = {}
-    local click_targets = {}
-    local function push_line(text, action)
-        lines[#lines + 1] = text
-        click_targets[#lines] = action
-    end
-
-    push_line(border_line())
+    local rows = {}
+    local footer
 
     if #tracks == 0 then
-        push_line(header_line("AUDIO", "none"))
-        push_line(divider_line())
-        push_line(menu_line("No audio tracks", "", false, true, false))
-        push_line(divider_line())
-        push_line(note_line("Esc close"))
+        rows[#rows + 1] = {
+            kind = "note",
+            text = "No audio tracks available in this file.",
+            bold = true,
+        }
+        footer = {
+            "Esc closes",
+        }
     else
-        push_line(header_line("AUDIO", track_count_label))
-        push_line(divider_line())
-
         if first_index > 1 then
-            push_line(menu_line("...", "", false, true, false))
+            rows[#rows + 1] = {
+                kind = "note",
+                text = "More choices above",
+            }
         end
 
         for index = first_index, last_index do
             local choice = choices[index]
             local current = (choice.id == false and active_id == false)
                 or (choice.id ~= false and tonumber(choice.id) == tonumber(active_id))
-            local right = current and "[ACTIVE]" or ""
-            push_line(menu_line(choice.label, right, index == selected_index, choice.muted == true, current), function()
-                selected_index = index
-                render_menu()
-            end)
+
+            rows[#rows + 1] = {
+                label = choice.label,
+                selected = index == selected_index,
+                muted = choice.muted == true,
+                badge = current and "ACTIVE" or nil,
+                action = function()
+                    apply_selection(index)
+                end,
+            }
         end
 
         if last_index < #choices then
-            push_line(menu_line("...", "", false, true, false))
+            rows[#rows + 1] = {
+                kind = "note",
+                text = "More choices below",
+            }
         end
 
-        push_line(divider_line())
-        push_line(note_line("Up/Down/Left/Right browse"))
-        push_line(note_line("Click select  Enter apply  Esc close"))
+        footer = {
+            "Up/Down or Wheel browse",
+            "Enter or Click applies | Esc closes",
+        }
     end
 
-    push_line(border_line())
-    last_click_targets = click_targets
-    last_line_count = #lines
-    last_line_height = math.max(18, body_size + 6)
-    last_panel_width = math.floor((panel_chars() + 4) * math.max(7, body_size * 0.62))
-
-    local ass = string.format(
-        "{\\an7\\pos(%d,%d)%s\\fs%d\\bord1\\shad0\\3c&H%s&}",
-        tonumber(options.left) or 36,
-        tonumber(options.top) or 44,
-        font_tag(),
-        body_size,
-        shadow_color
-    )
-
-    ass = ass .. table.concat(lines, "\\N")
-    overlay.data = ass
-    overlay:update()
+    ui:render({
+        title = "Audio",
+        badge = #tracks == 0 and "none" or (tostring(#tracks) .. (#tracks == 1 and " track" or " tracks")),
+        rows = rows,
+        footer = footer,
+    })
     reset_close_timer()
 end
 
@@ -433,25 +318,11 @@ local function bind_navigation_keys()
             return
         end
 
-        local left = tonumber(options.left) or 36
-        local top = tonumber(options.top) or 44
-        if x < left or x > left + last_panel_width or y < top then
+        local hit = ui:handle_click(x, y)
+        if hit == "outside" then
             close_menu()
-            return
-        end
-
-        local total_height = last_line_count * last_line_height
-        if y > top + total_height then
-            close_menu()
-            return
-        end
-
-        local line_index = math.floor((y - top) / last_line_height) + 1
-        local action = last_click_targets[line_index]
-        if action then
-            action()
-        else
-            close_menu()
+        elseif hit == "inside" then
+            reset_close_timer()
         end
     end)
     mp.add_forced_key_binding("WHEEL_UP", "audio-menu-wheel-up", function() move_selection(-1) end, { repeatable = true })
