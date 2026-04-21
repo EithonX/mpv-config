@@ -2340,23 +2340,28 @@ local function normalize_page_key(page_key)
     return target
 end
 
-local function set_page_target(page_key)
+local function set_page_target(page_key, standalone)
     local target = normalize_page_key(page_key)
 
-    page_stack = { PAGE_ROOT }
-    clear_page_hover(PAGE_ROOT)
-    if target ~= PAGE_ROOT then
-        if target == PAGE_PLAYLIST then
-            seed_playlist_selection()
-        end
+    if standalone and target ~= PAGE_ROOT then
+        page_stack = { target }
         clear_page_hover(target)
-        page_stack[#page_stack + 1] = target
+    else
+        page_stack = { PAGE_ROOT }
+        clear_page_hover(PAGE_ROOT)
+        if target ~= PAGE_ROOT then
+            if target == PAGE_PLAYLIST then
+                seed_playlist_selection()
+            end
+            clear_page_hover(target)
+            page_stack[#page_stack + 1] = target
+        end
     end
 
     return target
 end
 
-local function open_menu(page_key)
+local function open_menu(page_key, standalone)
     page_key = normalize_page_key(page_key)
     local was_open = menu_open
 
@@ -2372,7 +2377,7 @@ local function open_menu(page_key)
     if not was_open then
         mp.commandv("script-message", "menu-guard-acquire", "context-menu")
     end
-    set_page_target(page_key)
+    set_page_target(page_key, standalone)
 
     if was_open and bindings_registered then
         render_menu()
@@ -2585,18 +2590,18 @@ local function open_menu_here()
     open_menu(target)
 end
 
-local function open_menu_target_here(page_key)
+local function open_menu_target_here(page_key, standalone)
     local target = normalize_page_key(page_key)
     if menu_open then
         clear_submenu_hover()
         arm_submenu_hover()
         update_anchor_from_mouse()
-        set_page_target(target)
+        set_page_target(target, standalone)
         render_menu()
         return
     end
 
-    open_menu(target)
+    open_menu(target, standalone)
 end
 
 local function toggle_menu()
@@ -2635,6 +2640,10 @@ mp.register_script_message("context-menu-open-page", function(page_key)
 end)
 
 mp.register_script_message("context-menu-open-page-here", open_menu_target_here)
+
+mp.register_script_message("context-menu-open-page-standalone-here", function(page_key)
+    open_menu_target_here(page_key, true)
+end)
 
 mp.register_script_message("context-menu-toggle", toggle_menu)
 mp.register_script_message("context-menu-close", close_menu)
