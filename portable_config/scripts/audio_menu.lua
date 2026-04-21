@@ -293,7 +293,7 @@ render_menu = function()
         end
 
         footer = {
-            "Up/Down or Wheel browse",
+            "Arrows or Wheel move the cursor",
             "Enter or Click applies | Esc closes",
         }
     end

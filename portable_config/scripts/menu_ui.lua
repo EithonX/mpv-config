@@ -281,8 +281,8 @@ function M:render(spec)
     local ass = assdraw.ass_new()
     local hitboxes = {}
 
-    append_rect(ass, x + 8, y + 10, panel_width, panel_height, theme.shadow_color, "A8", theme.shadow_color, "A8", 0)
-    append_rect(ass, x, y, panel_width, panel_height, theme.panel_color, "24", theme.panel_color, "50", 1.2)
+    append_rect(ass, x + 8, y + 10, panel_width, panel_height, theme.shadow_color, "C0", theme.shadow_color, "C0", 0)
+    append_rect(ass, x, y, panel_width, panel_height, theme.panel_color, "54", theme.panel_color, "7C", 1.2)
     append_rect(ass, x, y, panel_width, 4, theme.accent_color, "00", theme.accent_color, "00", 0)
 
     local title_y = y + theme.padding_y + 2
@@ -314,9 +314,9 @@ function M:render(spec)
                 row_width,
                 1,
                 theme.surface_color,
-                "44",
+                "82",
                 theme.surface_color,
-                "44",
+                "82",
                 0
             )
         elseif row.kind == "section" then
@@ -361,9 +361,9 @@ function M:render(spec)
                 row_width,
                 item_height,
                 selected and theme.selection_color or theme.surface_color,
-                selected and "18" or "54",
+                selected and "48" or "7C",
                 selected and theme.accent_color or theme.surface_color,
-                selected and "4C" or "88",
+                selected and "74" or "A4",
                 selected and 1.4 or 1.0
             )
 

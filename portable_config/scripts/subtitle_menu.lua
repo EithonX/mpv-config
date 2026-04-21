@@ -228,44 +228,27 @@ local function set_secondary_track(track_id)
     end
 end
 
-local function cycle_mode(step)
-    local tracks = subtitle_tracks()
-    if #tracks == 0 then
-        return
+local function dual_mode_available(tracks, smart)
+    if #tracks < 2 then
+        return false
     end
 
-    local modes = { "primary" }
-    local current = current_mode()
-    local smart = auto_state()
     local primary = find_track_by_id(mp.get_property_number("sid", -1), tracks)
     local secondary = find_track_by_id(mp.get_property_number("secondary-sid", -1), tracks)
-    local has_manual_dual = current == "dual"
-        and primary
+    local has_manual_dual = primary
         and secondary
         and tonumber(primary.id) ~= tonumber(secondary.id)
 
-    if has_manual_dual or smart.smart_dual_available then
-        modes[#modes + 1] = "dual"
-    end
-
-    modes[#modes + 1] = "off"
-    local current_index = 1
-
-    for index, mode in ipairs(modes) do
-        if mode == current then
-            current_index = index
-            break
-        end
-    end
-
-    local next_index = ((current_index - 1 + step) % #modes) + 1
-    mp.commandv("script-message", "set-subtitle-mode", modes[next_index])
+    return has_manual_dual or smart.smart_dual_available == true
 end
 
-local function current_track_id(kind, tracks)
+local function current_choice_id(kind, tracks)
+    if kind == "mode" then
+        return current_mode()
+    end
+
     if kind == "secondary" then
-        local mode = current_mode()
-        local secondary = mode == "dual" and find_track_by_id(mp.get_property_number("secondary-sid", -1), tracks) or nil
+        local secondary = current_mode() == "dual" and find_track_by_id(mp.get_property_number("secondary-sid", -1), tracks) or nil
         return secondary and tonumber(secondary.id) or false
     end
 
@@ -277,7 +260,38 @@ local function current_track_id(kind, tracks)
     return primary and tonumber(primary.id) or nil
 end
 
+local function mode_choices(tracks, smart)
+    local choices = {
+        {
+            id = "primary",
+            label = "Primary",
+            value = "Single track",
+        },
+    }
+
+    if dual_mode_available(tracks, smart) then
+        choices[#choices + 1] = {
+            id = "dual",
+            label = "Dual",
+            value = "Recommended pair",
+        }
+    end
+
+    choices[#choices + 1] = {
+        id = "off",
+        label = "Off",
+        value = "Hide subtitles",
+        muted = true,
+    }
+
+    return choices
+end
+
 local function picker_choices(kind, tracks)
+    if kind == "mode" then
+        return mode_choices(tracks, auto_state())
+    end
+
     local choices = {}
 
     if kind == "secondary" then
@@ -329,7 +343,7 @@ local function set_picker_index_for_current(tracks)
         return
     end
 
-    local target_id = current_track_id(picker_kind, tracks)
+    local target_id = current_choice_id(picker_kind, tracks)
     picker_index = math.min(math.max(picker_index, 1), #choices)
 
     for index, choice in ipairs(choices) do
@@ -337,7 +351,7 @@ local function set_picker_index_for_current(tracks)
             picker_index = index
             return
         end
-        if choice.id ~= false and tonumber(choice.id) == tonumber(target_id) then
+        if choice.id ~= false and tostring(choice.id) == tostring(target_id) then
             picker_index = index
             return
         end
@@ -369,144 +383,17 @@ local function open_picker(kind)
         return
     end
 
-    selected_row = kind == "secondary" and 4 or 3
+    if kind == "mode" then
+        selected_row = 1
+    elseif kind == "primary" then
+        selected_row = 2
+    else
+        selected_row = 3
+    end
+
     picker_kind = kind
     picker_index = 1
     set_picker_index_for_current(tracks)
-end
-
-local function move_picker(step)
-    local tracks = subtitle_tracks()
-    local choices = picker_choices(picker_kind, tracks)
-    if #choices == 0 then
-        return
-    end
-
-    picker_index = ((picker_index - 1 + step) % #choices) + 1
-    render_menu()
-end
-
-local function apply_picker_selection(close_after)
-    local tracks = subtitle_tracks()
-    local choices = picker_choices(picker_kind, tracks)
-    if #choices == 0 then
-        close_picker()
-        render_menu()
-        return
-    end
-
-    local choice = choices[picker_index]
-    if not choice then
-        return
-    end
-
-    if picker_kind == "secondary" then
-        set_secondary_track(choice.id)
-    else
-        set_primary_track(choice.id)
-    end
-
-    if close_after then
-        close_picker()
-    else
-        set_picker_index_for_current(subtitle_tracks())
-    end
-
-    render_menu()
-end
-
-local function smart_primary_available(tracks, smart)
-    return #tracks > 0 and smart.smart_primary_available == true
-end
-
-local function smart_dual_available(tracks, smart)
-    return #tracks > 1 and smart.smart_dual_available == true
-end
-
-local function apply_auto_selection(kind)
-    local tracks = subtitle_tracks()
-    local smart = auto_state()
-
-    if kind == "dual" then
-        if #tracks < 2 then
-            mp.osd_message("Auto Dual needs at least 2 subtitle tracks", 1.2)
-            return false
-        end
-        if not smart_dual_available(tracks, smart) then
-            mp.osd_message("Auto Dual: no clean signs/dialogue pair found", 1.2)
-            return false
-        end
-    else
-        if not smart_primary_available(tracks, smart) then
-            mp.osd_message("Auto Primary unavailable", 1.2)
-            return false
-        end
-    end
-
-    mp.commandv("script-message", "smart-select-subtitles", kind)
-    return true
-end
-
-local function current_smart_kind(mode, primary, secondary, smart)
-    if smart.smart_dual_available
-        and mode == "dual"
-        and primary
-        and secondary
-        and tonumber(primary.id) == tonumber(smart.smart_dual_primary_id)
-        and tonumber(secondary.id) == tonumber(smart.smart_dual_secondary_id) then
-        return "dual"
-    end
-
-    if smart.smart_primary_available
-        and mode == "primary"
-        and primary
-        and tonumber(primary.id) == tonumber(smart.smart_primary_id) then
-        return "primary"
-    end
-
-    return nil
-end
-
-local function cycle_smart(step)
-    local tracks = subtitle_tracks()
-    local smart = auto_state()
-    local choices = {}
-
-    if smart_primary_available(tracks, smart) then
-        choices[#choices + 1] = "primary"
-    end
-    if smart_dual_available(tracks, smart) then
-        choices[#choices + 1] = "dual"
-    end
-
-    if #choices == 0 then
-        mp.osd_message("No smart subtitle choice available", 1.2)
-        return
-    end
-
-    local mode = current_mode()
-    local primary = ensure_primary_track(tracks)
-    local secondary = mode == "dual" and find_track_by_id(mp.get_property_number("secondary-sid", -1), tracks) or nil
-    local current_kind = current_smart_kind(mode, primary, secondary, smart)
-    local current_index = nil
-
-    for index, choice in ipairs(choices) do
-        if choice == current_kind then
-            current_index = index
-            break
-        end
-    end
-
-    local next_index
-    if current_index then
-        next_index = ((current_index - 1 + step) % #choices) + 1
-    elseif step >= 0 then
-        next_index = 1
-    else
-        next_index = #choices
-    end
-
-    apply_auto_selection(choices[next_index])
 end
 
 local function picker_window(choice_count)
@@ -531,24 +418,55 @@ local function picker_window(choice_count)
     return first_index, last_index
 end
 
-local function smart_status_label(kind, primary_available, dual_available)
-    if kind == "primary" then
-        return "PRIMARY"
+local function move_picker(step)
+    local tracks = subtitle_tracks()
+    local choices = picker_choices(picker_kind, tracks)
+    if #choices == 0 then
+        return
     end
-    if kind == "dual" then
-        return "DUAL"
-    end
-    if primary_available or dual_available then
-        return "READY"
-    end
-    return "NONE"
+
+    picker_index = ((picker_index - 1 + step) % #choices) + 1
+    render_menu()
 end
 
-local function mode_cycle_text(dual_available)
-    if dual_available then
-        return "Cycle: Primary | Dual | Off"
+local function apply_mode_choice(mode_id)
+    if mode_id == current_mode() then
+        return true
     end
-    return "Cycle: Primary | Off"
+
+    mp.commandv("script-message", "set-subtitle-mode", mode_id)
+    return true
+end
+
+local function apply_picker_selection(close_after)
+    local tracks = subtitle_tracks()
+    local choices = picker_choices(picker_kind, tracks)
+    if #choices == 0 then
+        close_picker()
+        render_menu()
+        return
+    end
+
+    local choice = choices[picker_index]
+    if not choice then
+        return
+    end
+
+    if picker_kind == "mode" then
+        apply_mode_choice(choice.id)
+    elseif picker_kind == "secondary" then
+        set_secondary_track(choice.id)
+    else
+        set_primary_track(choice.id)
+    end
+
+    if close_after then
+        close_picker()
+    else
+        set_picker_index_for_current(subtitle_tracks())
+    end
+
+    render_menu()
 end
 
 render_menu = function()
@@ -561,15 +479,13 @@ render_menu = function()
 
     local mode = current_mode()
     local smart = auto_state()
-    local row_count = #tracks > 0 and 4 or 1
+    local row_count = #tracks > 0 and 3 or 1
     if selected_row > row_count then
         selected_row = row_count
     end
 
     local primary = #tracks > 0 and ensure_primary_track(tracks) or nil
     local secondary = mode == "dual" and find_track_by_id(mp.get_property_number("secondary-sid", -1), tracks) or nil
-    local smart_kind = current_smart_kind(mode, primary, secondary, smart)
-    local dual_available = #tracks > 1 and ((mode == "dual" and secondary ~= nil) or smart.smart_dual_available == true)
     local rows = {}
     local footer
 
@@ -595,7 +511,7 @@ render_menu = function()
     if picker_kind then
         local choices = picker_choices(picker_kind, tracks)
         local first_index, last_index = picker_window(#choices)
-        local active_id = current_track_id(picker_kind, tracks)
+        local active_id = current_choice_id(picker_kind, tracks)
 
         if picker_kind == "secondary" and primary then
             rows[#rows + 1] = {
@@ -618,12 +534,14 @@ render_menu = function()
         for index = first_index, last_index do
             local choice = choices[index]
             local current = (choice.id == false and active_id == false)
-                or (choice.id ~= false and tonumber(choice.id) == tonumber(active_id))
+                or (choice.id ~= false and tostring(choice.id) == tostring(active_id))
 
             rows[#rows + 1] = {
                 label = choice.label,
+                value = choice.value,
                 selected = index == picker_index,
                 muted = choice.muted == true,
+                value_color = choice.muted == true and "muted" or nil,
                 badge = current and "ACTIVE" or nil,
                 action = function()
                     picker_index = index
@@ -640,13 +558,15 @@ render_menu = function()
         end
 
         footer = {
-            "Up/Down browse | Left back | Right swap",
-            "Enter or Click applies",
+            "Arrows only move the cursor",
+            "Enter or Click applies | Esc back",
         }
 
         ui:render({
-            title = picker_kind == "primary" and "Primary Subtitle" or "Secondary Subtitle",
-            badge = picker_kind,
+            title = picker_kind == "mode"
+                and "Subtitle Mode"
+                or (picker_kind == "primary" and "Primary Subtitle" or "Secondary Subtitle"),
+            badge = picker_kind == "mode" and string.upper(mode) or picker_kind,
             rows = rows,
             footer = footer,
         })
@@ -664,6 +584,8 @@ render_menu = function()
     elseif mode == "dual" then
         secondary_value = display_track_name(secondary)
         secondary_muted = false
+    elseif smart.smart_dual_available then
+        secondary_value = "Ready when Dual is used"
     end
 
     rows[#rows + 1] = {
@@ -673,39 +595,19 @@ render_menu = function()
         value_color = "accent",
         action = function()
             selected_row = 1
-            cycle_mode(1)
+            open_picker("mode")
             render_menu()
         end,
-    }
-    rows[#rows + 1] = {
-        kind = "note",
-        text = mode_cycle_text(dual_available),
-    }
-    rows[#rows + 1] = {
-        label = "Smart",
-        value = smart_status_label(smart_kind, smart_primary_available(tracks, smart), smart_dual_available(tracks, smart)),
-        selected = selected_row == 2,
-        muted = not smart_primary_available(tracks, smart) and not smart_dual_available(tracks, smart),
-        value_color = smart_kind and "accent" or "muted",
-        action = function()
-            selected_row = 2
-            cycle_smart(1)
-            render_menu()
-        end,
-    }
-    rows[#rows + 1] = {
-        kind = "section",
-        text = "Manual tracks",
     }
     rows[#rows + 1] = {
         label = "Primary",
         value = primary_value,
         value_share = 0.72,
-        selected = selected_row == 3,
+        selected = selected_row == 2,
         muted = primary_muted,
         value_color = primary_muted and "muted" or "text",
         action = function()
-            selected_row = 3
+            selected_row = 2
             open_picker("primary")
             render_menu()
         end,
@@ -714,19 +616,19 @@ render_menu = function()
         label = "Secondary",
         value = secondary_value,
         value_share = 0.72,
-        selected = selected_row == 4,
+        selected = selected_row == 3,
         muted = secondary_muted,
         value_color = secondary_muted and "muted" or "text",
         action = function()
-            selected_row = 4
+            selected_row = 3
             open_picker("secondary")
             render_menu()
         end,
     }
 
     footer = {
-        "Left/Right changes Mode or Smart",
-        "Enter opens list | Click activates | Esc closes",
+        "Arrows only move the cursor",
+        "Enter opens/applies | Esc closes",
     }
 
     ui:render({
@@ -744,38 +646,8 @@ local function move_selection(step)
         return
     end
 
-    local row_count = #subtitle_tracks() > 0 and 4 or 1
+    local row_count = #subtitle_tracks() > 0 and 3 or 1
     selected_row = ((selected_row - 1 + step) % row_count) + 1
-    render_menu()
-end
-
-local function change_value(step)
-    if picker_kind then
-        if step < 0 then
-            close_picker()
-        elseif #subtitle_tracks() > 1 then
-            if picker_kind == "primary" then
-                open_picker("secondary")
-            else
-                open_picker("primary")
-            end
-        else
-            mp.osd_message("Only one subtitle track available", 1.2)
-            return
-        end
-        render_menu()
-        return
-    end
-
-    if selected_row == 1 then
-        cycle_mode(step)
-    elseif selected_row == 2 then
-        cycle_smart(step)
-    elseif selected_row == 3 then
-        open_picker("primary")
-    elseif selected_row == 4 then
-        open_picker("secondary")
-    end
     render_menu()
 end
 
@@ -791,25 +663,19 @@ local function activate_selection()
     end
 
     if selected_row == 1 then
-        cycle_mode(1)
-        render_menu()
-        return
-    end
-
-    if selected_row == 2 then
-        cycle_smart(1)
-        render_menu()
-        return
-    end
-
-    if selected_row == 3 then
+        open_picker("mode")
+    elseif selected_row == 2 then
         open_picker("primary")
-        render_menu()
-        return
+    else
+        open_picker("secondary")
     end
 
-    if selected_row == 4 then
-        open_picker("secondary")
+    render_menu()
+end
+
+local function escape_menu()
+    if picker_kind then
+        close_picker()
         render_menu()
         return
     end
@@ -820,8 +686,8 @@ end
 local function bind_navigation_keys()
     mp.add_forced_key_binding("UP", "subtitle-menu-up", function() move_selection(-1) end, { repeatable = true })
     mp.add_forced_key_binding("DOWN", "subtitle-menu-down", function() move_selection(1) end, { repeatable = true })
-    mp.add_forced_key_binding("LEFT", "subtitle-menu-left", function() change_value(-1) end, { repeatable = true })
-    mp.add_forced_key_binding("RIGHT", "subtitle-menu-right", function() change_value(1) end, { repeatable = true })
+    mp.add_forced_key_binding("LEFT", "subtitle-menu-left", function() move_selection(-1) end, { repeatable = true })
+    mp.add_forced_key_binding("RIGHT", "subtitle-menu-right", function() move_selection(1) end, { repeatable = true })
     mp.add_forced_key_binding("MBTN_LEFT", "subtitle-menu-mouse-left", function()
         local x, y = mp.get_mouse_pos()
         if not x or not y then
@@ -839,7 +705,7 @@ local function bind_navigation_keys()
     mp.add_forced_key_binding("WHEEL_DOWN", "subtitle-menu-wheel-down", function() move_selection(1) end, { repeatable = true })
     mp.add_forced_key_binding("ENTER", "subtitle-menu-enter", activate_selection)
     mp.add_forced_key_binding("KP_ENTER", "subtitle-menu-kp-enter", activate_selection)
-    mp.add_forced_key_binding("ESC", "subtitle-menu-escape", close_menu)
+    mp.add_forced_key_binding("ESC", "subtitle-menu-escape", escape_menu)
 end
 
 local function open_menu()
