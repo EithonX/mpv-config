@@ -1,6 +1,7 @@
 local mp = require "mp"
 local timer = nil
-local delay = 0.18
+local delay = 0.12
+local double_click_cooldown = 0.30
 local suppress_single_until = 0
 local context_menu_open_path = "user-data/context_menu/open"
 
@@ -40,7 +41,7 @@ end
 
 local function right_click_double()
     clear_timer()
-    suppress_single_until = mp.get_time() + 0.35
+    suppress_single_until = mp.get_time() + double_click_cooldown
     mp.commandv("script-message", "context-menu-close")
     mp.commandv("script-message", "chapter-menu-close")
     mp.commandv("script-message", "subtitle-menu-close")

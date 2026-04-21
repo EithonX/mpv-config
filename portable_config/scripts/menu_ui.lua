@@ -296,230 +296,236 @@ function M:measure_panel(spec)
     return panel_width, panel_height
 end
 
-function M:render(spec)
+function M:render_panels(specs)
     local osd_width, osd_height = self:get_osd_size()
     local theme = self.theme
-    local inner_width = self:panel_inner_width(spec.panel_chars)
-    local panel_width, panel_height = self:measure_panel(spec)
-    local footer = spec.footer or {}
-
-    local panel_x = tonumber(spec.left)
-    local panel_y = tonumber(spec.top)
-    local x = clamp(panel_x or theme.x, 12, math.max(12, osd_width - panel_width - 12))
-    local y = clamp(panel_y or theme.y, 12, math.max(12, osd_height - panel_height - 12))
-    local row_x = x + theme.padding_x
-    local row_width = inner_width
-    local cursor_y = y + theme.padding_y + theme.header_height
-
     local ass = assdraw.ass_new()
     local hitboxes = {}
+    local panel_bounds = {}
 
-    append_rect(ass, x + 8, y + 10, panel_width, panel_height, theme.shadow_color, "C0", theme.shadow_color, "C0", 0)
-    append_rect(ass, x, y, panel_width, panel_height, theme.panel_color, "54", theme.panel_color, "7C", 1.2)
-    append_rect(ass, x, y, panel_width, 4, theme.accent_color, "00", theme.accent_color, "00", 0)
+    for panel_index, spec in ipairs(specs or {}) do
+        local inner_width = self:panel_inner_width(spec.panel_chars)
+        local panel_width, panel_height = self:measure_panel(spec)
+        local footer = spec.footer or {}
+        local panel_x = tonumber(spec.left)
+        local panel_y = tonumber(spec.top)
+        local x = clamp(panel_x or theme.x, 12, math.max(12, osd_width - panel_width - 12))
+        local y = clamp(panel_y or theme.y, 12, math.max(12, osd_height - panel_height - 12))
+        local row_x = x + theme.padding_x
+        local row_width = inner_width
+        local cursor_y = y + theme.padding_y + theme.header_height
 
-    local title_y = y + theme.padding_y + 2
-    append_text(ass, theme, x + theme.padding_x, title_y, compact_text(spec.title or ""), theme.title_size, theme.text_color, true, 7)
+        append_rect(ass, x + 8, y + 10, panel_width, panel_height, theme.shadow_color, "C0", theme.shadow_color, "C0", 0)
+        append_rect(ass, x, y, panel_width, panel_height, theme.panel_color, "54", theme.panel_color, "7C", 1.2)
+        append_rect(ass, x, y, panel_width, 4, theme.accent_color, "00", theme.accent_color, "00", 0)
 
-    local header_badge = compact_text(spec.badge or "")
-    if header_badge ~= "" then
-        local badge_size = math.max(10, theme.note_size)
-        local badge_width = math.ceil(self:measure_text(header_badge, badge_size, true) + (theme.badge_padding_x * 2))
-        self:draw_badge(
-            ass,
-            x + panel_width - theme.padding_x - badge_width,
-            y + theme.padding_y,
-            header_badge,
-            theme.accent_color,
-            theme.panel_color,
-            badge_size
-        )
-    end
+        local title_y = y + theme.padding_y + 2
+        append_text(ass, theme, x + theme.padding_x, title_y, compact_text(spec.title or ""), theme.title_size, theme.text_color, true, 7)
 
-    for _, row in ipairs(spec.rows or {}) do
-        local block_height = self:block_height(row)
-
-        if row.kind == "divider" then
-            append_rect(
+        local header_badge = compact_text(spec.badge or "")
+        if header_badge ~= "" then
+            local badge_size = math.max(10, theme.note_size)
+            local badge_width = math.ceil(self:measure_text(header_badge, badge_size, true) + (theme.badge_padding_x * 2))
+            self:draw_badge(
                 ass,
-                row_x,
-                cursor_y + math.floor(block_height / 2),
-                row_width,
-                1,
-                theme.surface_color,
-                "82",
-                theme.surface_color,
-                "82",
-                0
+                x + panel_width - theme.padding_x - badge_width,
+                y + theme.padding_y,
+                header_badge,
+                theme.accent_color,
+                theme.panel_color,
+                badge_size
             )
-        elseif row.kind == "section" then
-            local section_text = self:fit_text(string.upper(compact_text(row.text or "")), row_width, theme.section_size, true)
-            append_text(
-                ass,
-                theme,
-                row_x,
-                cursor_y + 2,
-                section_text,
-                theme.section_size,
-                row.muted and theme.muted_color or theme.accent_color,
-                true,
-                7
-            )
-        elseif row.kind == "note" then
-            local note_text = self:fit_text(compact_text(row.text or ""), row_width, theme.note_size, false)
-            append_text(
-                ass,
-                theme,
-                row_x,
-                cursor_y + 1,
-                note_text,
-                theme.note_size,
-                row.accent and theme.accent_color or theme.muted_color,
-                row.bold == true,
-                7
-            )
-        else
-            local selected = row.selected == true
-            local hovered = row.hovered == true
-            local muted = row.muted == true
-            local badge_text = compact_text(row.badge or "")
-            local badge_width = 0
-            local badge_gap = 0
-            local item_y = cursor_y
-            local item_height = block_height - 2
-            local fill_color = theme.surface_color
-            local fill_alpha = "7C"
-            local border_color = theme.surface_color
-            local border_alpha = "A4"
-            local border_size = 1.0
+        end
 
-            if selected then
-                fill_color = theme.selection_color
-                fill_alpha = "48"
-                border_color = theme.accent_color
-                border_alpha = "74"
-                border_size = 1.4
-            elseif hovered then
-                fill_color = theme.hover_color
-                fill_alpha = "5C"
-                border_color = theme.accent_color
-                border_alpha = "98"
-                border_size = 1.1
-            end
+        for _, row in ipairs(spec.rows or {}) do
+            local block_height = self:block_height(row)
 
-            append_rect(
-                ass,
-                row_x,
-                item_y,
-                row_width,
-                item_height,
-                fill_color,
-                fill_alpha,
-                border_color,
-                border_alpha,
-                border_size
-            )
-
-            if selected then
-                append_rect(ass, row_x, item_y, 4, item_height, theme.accent_color, "00", theme.accent_color, "00", 0)
-            elseif hovered then
-                append_rect(ass, row_x, item_y, 2, item_height, theme.accent_color, "40", theme.accent_color, "40", 0)
-            end
-
-            local badge_x = row_x + row_width - 14
-            if badge_text ~= "" then
-                local badge_fill = row.badge_fill == "muted" and theme.surface_color or theme.accent_color
-                local badge_text_color = row.badge_fill == "muted" and theme.text_color or theme.panel_color
-                badge_width = math.ceil(self:measure_text(badge_text, theme.section_size, true) + (theme.badge_padding_x * 2))
-                badge_gap = 10
-                self:draw_badge(
+            if row.kind == "divider" then
+                append_rect(
                     ass,
-                    badge_x - badge_width,
-                    item_y + math.floor((item_height - (theme.section_size + (theme.badge_padding_y * 2))) / 2),
-                    badge_text,
-                    badge_fill,
-                    badge_text_color,
-                    theme.section_size
+                    row_x,
+                    cursor_y + math.floor(block_height / 2),
+                    row_width,
+                    1,
+                    theme.surface_color,
+                    "82",
+                    theme.surface_color,
+                    "82",
+                    0
                 )
-            end
-
-            local content_y = item_y + math.floor((item_height - theme.body_size) / 2) - 1
-            local label_x = row_x + 14
-            local value_right = badge_x - badge_width - badge_gap
-            local value_width = math.max(0, value_right - label_x - 18)
-            local raw_value = compact_text(row.value or "")
-            local value_size = row.value_size or theme.body_size
-            local value_bold = row.value_bold == true
-            local min_value_share = clamp(tonumber(row.min_value_share) or 0.25, 0.05, 0.8)
-            local value_share = clamp(tonumber(row.value_share) or 0.46, min_value_share, 0.8)
-            local value_text = raw_value ~= "" and self:fit_text(raw_value, math.max(0, math.floor(value_width * value_share)), value_size, value_bold) or ""
-            local value_measured = value_text ~= "" and self:measure_text(value_text, value_size, value_bold) or 0
-            local label_limit = math.max(0, value_width - value_measured - (value_text ~= "" and 20 or 0))
-            local label_text = self:fit_text(compact_text(row.label or ""), label_limit, theme.body_size, true)
-
-            if label_text == "" then
-                label_text = self:fit_text(compact_text(row.label or ""), value_width, theme.body_size, true)
-                value_text = ""
-                value_measured = 0
-            end
-
-            local label_color = muted and theme.muted_color or theme.text_color
-            local value_color = theme.muted_color
-            if row.value_color == "accent" then
-                value_color = theme.accent_color
-            elseif row.value_color == "text" then
-                value_color = theme.text_color
-            elseif muted then
-                value_color = theme.muted_color
-            end
-
-            append_text(ass, theme, label_x, content_y, label_text, theme.body_size, label_color, true, 7)
-
-            if value_text ~= "" then
+            elseif row.kind == "section" then
+                local section_text = self:fit_text(string.upper(compact_text(row.text or "")), row_width, theme.section_size, true)
                 append_text(
                     ass,
                     theme,
-                    value_right,
-                    content_y,
-                    value_text,
-                    value_size,
-                    value_color,
-                    value_bold,
-                    9
+                    row_x,
+                    cursor_y + 2,
+                    section_text,
+                    theme.section_size,
+                    row.muted and theme.muted_color or theme.accent_color,
+                    true,
+                    7
                 )
+            elseif row.kind == "note" then
+                local note_text = self:fit_text(compact_text(row.text or ""), row_width, theme.note_size, false)
+                append_text(
+                    ass,
+                    theme,
+                    row_x,
+                    cursor_y + 1,
+                    note_text,
+                    theme.note_size,
+                    row.accent and theme.accent_color or theme.muted_color,
+                    row.bold == true,
+                    7
+                )
+            else
+                local selected = row.selected == true
+                local hovered = row.hovered == true
+                local muted = row.muted == true
+                local badge_text = compact_text(row.badge or "")
+                local badge_width = 0
+                local badge_gap = 0
+                local item_y = cursor_y
+                local item_height = block_height - 2
+                local fill_color = theme.surface_color
+                local fill_alpha = "7C"
+                local border_color = theme.surface_color
+                local border_alpha = "A4"
+                local border_size = 1.0
+
+                if selected then
+                    fill_color = theme.selection_color
+                    fill_alpha = "48"
+                    border_color = theme.accent_color
+                    border_alpha = "74"
+                    border_size = 1.4
+                elseif hovered then
+                    fill_color = theme.hover_color
+                    fill_alpha = "5C"
+                    border_color = theme.accent_color
+                    border_alpha = "98"
+                    border_size = 1.1
+                end
+
+                append_rect(
+                    ass,
+                    row_x,
+                    item_y,
+                    row_width,
+                    item_height,
+                    fill_color,
+                    fill_alpha,
+                    border_color,
+                    border_alpha,
+                    border_size
+                )
+
+                if selected then
+                    append_rect(ass, row_x, item_y, 4, item_height, theme.accent_color, "00", theme.accent_color, "00", 0)
+                elseif hovered then
+                    append_rect(ass, row_x, item_y, 2, item_height, theme.accent_color, "40", theme.accent_color, "40", 0)
+                end
+
+                local badge_x = row_x + row_width - 14
+                if badge_text ~= "" then
+                    local badge_fill = row.badge_fill == "muted" and theme.surface_color or theme.accent_color
+                    local badge_text_color = row.badge_fill == "muted" and theme.text_color or theme.panel_color
+                    badge_width = math.ceil(self:measure_text(badge_text, theme.section_size, true) + (theme.badge_padding_x * 2))
+                    badge_gap = 10
+                    self:draw_badge(
+                        ass,
+                        badge_x - badge_width,
+                        item_y + math.floor((item_height - (theme.section_size + (theme.badge_padding_y * 2))) / 2),
+                        badge_text,
+                        badge_fill,
+                        badge_text_color,
+                        theme.section_size
+                    )
+                end
+
+                local content_y = item_y + math.floor((item_height - theme.body_size) / 2) - 1
+                local label_x = row_x + 14
+                local value_right = badge_x - badge_width - badge_gap
+                local value_width = math.max(0, value_right - label_x - 18)
+                local raw_value = compact_text(row.value or "")
+                local value_size = row.value_size or theme.body_size
+                local value_bold = row.value_bold == true
+                local min_value_share = clamp(tonumber(row.min_value_share) or 0.25, 0.05, 0.8)
+                local value_share = clamp(tonumber(row.value_share) or 0.46, min_value_share, 0.8)
+                local value_text = raw_value ~= "" and self:fit_text(raw_value, math.max(0, math.floor(value_width * value_share)), value_size, value_bold) or ""
+                local value_measured = value_text ~= "" and self:measure_text(value_text, value_size, value_bold) or 0
+                local label_limit = math.max(0, value_width - value_measured - (value_text ~= "" and 20 or 0))
+                local label_text = self:fit_text(compact_text(row.label or ""), label_limit, theme.body_size, true)
+
+                if label_text == "" then
+                    label_text = self:fit_text(compact_text(row.label or ""), value_width, theme.body_size, true)
+                    value_text = ""
+                    value_measured = 0
+                end
+
+                local label_color = muted and theme.muted_color or theme.text_color
+                local value_color = theme.muted_color
+                if row.value_color == "accent" then
+                    value_color = theme.accent_color
+                elseif row.value_color == "text" then
+                    value_color = theme.text_color
+                elseif muted then
+                    value_color = theme.muted_color
+                end
+
+                append_text(ass, theme, label_x, content_y, label_text, theme.body_size, label_color, true, 7)
+
+                if value_text ~= "" then
+                    append_text(
+                        ass,
+                        theme,
+                        value_right,
+                        content_y,
+                        value_text,
+                        value_size,
+                        value_color,
+                        value_bold,
+                        9
+                    )
+                end
+
+                if row.action then
+                    hitboxes[#hitboxes + 1] = {
+                        panel_index = panel_index,
+                        x1 = row_x,
+                        y1 = item_y,
+                        x2 = row_x + row_width,
+                        y2 = item_y + item_height,
+                        row_index = row.choice_index,
+                        action = row.action,
+                    }
+                end
             end
 
-            if row.action then
-                hitboxes[#hitboxes + 1] = {
-                    x1 = row_x,
-                    y1 = item_y,
-                    x2 = row_x + row_width,
-                    y2 = item_y + item_height,
-                    row_index = row.choice_index,
-                    action = row.action,
-                }
+            cursor_y = cursor_y + block_height
+        end
+
+        if #footer > 0 then
+            cursor_y = cursor_y + 10
+            for _, line in ipairs(footer) do
+                local footer_text = self:fit_text(compact_text(line), row_width, theme.note_size, false)
+                append_text(ass, theme, row_x, cursor_y + 1, footer_text, theme.note_size, theme.muted_color, false, 7)
+                cursor_y = cursor_y + theme.note_height
             end
         end
 
-        cursor_y = cursor_y + block_height
-    end
-
-    if #footer > 0 then
-        cursor_y = cursor_y + 10
-        for _, line in ipairs(footer) do
-            local footer_text = self:fit_text(compact_text(line), row_width, theme.note_size, false)
-            append_text(ass, theme, row_x, cursor_y + 1, footer_text, theme.note_size, theme.muted_color, false, 7)
-            cursor_y = cursor_y + theme.note_height
-        end
+        panel_bounds[#panel_bounds + 1] = {
+            panel_index = panel_index,
+            x1 = x,
+            y1 = y,
+            x2 = x + panel_width,
+            y2 = y + panel_height,
+        }
     end
 
     self.hitboxes = hitboxes
-    self.panel_bounds = {
-        x1 = x,
-        y1 = y,
-        x2 = x + panel_width,
-        y2 = y + panel_height,
-    }
+    self.panel_bounds = panel_bounds
 
     self.overlay.res_x = osd_width
     self.overlay.res_y = osd_height
@@ -528,26 +534,44 @@ function M:render(spec)
     self.overlay:update()
 end
 
+function M:render(spec)
+    self:render_panels({ spec })
+end
+
 function M:hit_test(x, y)
     if not self.panel_bounds then
         return { kind = "outside" }
     end
 
-    if x < self.panel_bounds.x1 or x > self.panel_bounds.x2 or y < self.panel_bounds.y1 or y > self.panel_bounds.y2 then
+    local inside_panel = nil
+    for index = #self.panel_bounds, 1, -1 do
+        local bounds = self.panel_bounds[index]
+        if x >= bounds.x1 and x <= bounds.x2 and y >= bounds.y1 and y <= bounds.y2 then
+            inside_panel = bounds
+            break
+        end
+    end
+
+    if not inside_panel then
         return { kind = "outside" }
     end
 
-    for _, hitbox in ipairs(self.hitboxes) do
+    for index = #self.hitboxes, 1, -1 do
+        local hitbox = self.hitboxes[index]
         if x >= hitbox.x1 and x <= hitbox.x2 and y >= hitbox.y1 and y <= hitbox.y2 then
             return {
                 kind = "item",
+                panel_index = hitbox.panel_index,
                 row_index = hitbox.row_index,
                 action = hitbox.action,
             }
         end
     end
 
-    return { kind = "inside" }
+    return {
+        kind = "inside",
+        panel_index = inside_panel.panel_index,
+    }
 end
 
 function M:clear()

@@ -13,6 +13,8 @@ local options = {
     playlist_rows = 11,
     playlist_bottom_margin = 108,
     timeout = 10,
+    submenu_hover_arm_delay = 0.22,
+    submenu_hover_delay = 0.10,
     marquee_delay = 0.8,
     marquee_step = 0.2,
     marquee_gap = 6,
@@ -45,6 +47,9 @@ local mouse_x = nil
 local mouse_y = nil
 local bindings_registered = false
 local playlist_marquee_timer = nil
+local submenu_hover_timer = nil
+local submenu_hover_target = nil
+local submenu_hover_armed_at = 0
 local marquee_focus_key = nil
 local marquee_started_at = 0
 
@@ -65,6 +70,19 @@ local PAGE_TOOLS = "tools"
 
 local function compact_text(text)
     return tostring(text or ""):gsub("%s+", " "):gsub("^%s*(.-)%s*$", "%1")
+end
+
+local function invoke_action(action)
+    if type(action) ~= "function" then
+        return true
+    end
+
+    local ok, err = xpcall(action, debug.traceback)
+    if not ok then
+        mp.msg.error("context menu action failed: " .. tostring(err))
+        mp.osd_message("Menu action failed", 1.5)
+    end
+    return ok
 end
 
 local function clamp(value, min_value, max_value)
@@ -148,6 +166,22 @@ local function stop_playlist_marquee()
     marquee_started_at = 0
 end
 
+local function clear_submenu_hover()
+    if submenu_hover_timer then
+        submenu_hover_timer:kill()
+        submenu_hover_timer = nil
+    end
+    submenu_hover_target = nil
+end
+
+local function arm_submenu_hover()
+    submenu_hover_armed_at = mp.get_time() + math.max(0.04, tonumber(options.submenu_hover_arm_delay) or 0.22)
+end
+
+local function submenu_hover_ready()
+    return mp.get_time() >= (submenu_hover_armed_at or 0)
+end
+
 local function reset_close_timer()
     clear_close_timer()
     if options.timeout <= 0 then
@@ -160,6 +194,8 @@ end
 close_menu = function()
     clear_close_timer()
     stop_playlist_marquee()
+    clear_submenu_hover()
+    submenu_hover_armed_at = 0
     marquee_focus_key = nil
     marquee_started_at = 0
     if menu_open then
@@ -673,6 +709,18 @@ local function current_page_key()
     return page_stack[#page_stack] or PAGE_ROOT
 end
 
+local function page_key_at(depth)
+    return page_stack[depth] or PAGE_ROOT
+end
+
+local function trim_page_stack(depth)
+    depth = math.max(1, tonumber(depth) or 1)
+    while #page_stack > depth do
+        clear_page_hover(page_stack[#page_stack])
+        table.remove(page_stack)
+    end
+end
+
 local function picker_window(choice_count, selected_index)
     local max_rows = math.max(4, tonumber(options.rows) or 9)
     local first_index = 1
@@ -817,22 +865,22 @@ end
 
 local function root_footer()
     return {
-        "Enter or Right opens | Left closes",
-        "Right click toggles | Esc closes",
+        "Hover opens submenu panels | Enter or Right opens",
+        "Right click inside goes back | outside repositions",
     }
 end
 
 local function child_footer()
     return {
-        "Enter or Right applies",
-        "Left goes back | Esc closes",
+        "Hover opens submenu panels | Enter or Right opens or applies",
+        "Right click goes back | Esc closes",
     }
 end
 
 local function playlist_footer()
     return {
         "Enter plays the file or applies the control",
-        "Left goes back | Arrows and wheel browse",
+        "Right click goes back | Arrows and wheel browse",
     }
 end
 
@@ -933,7 +981,9 @@ end
 
 local function submenu_action(page_key)
     return function()
-        clear_page_hover(current_page_key())
+        clear_submenu_hover()
+        local parent_key = current_page_key()
+        clear_page_hover(parent_key)
         if page_key == PAGE_PLAYLIST then
             seed_playlist_selection()
         end
@@ -941,6 +991,48 @@ local function submenu_action(page_key)
         page_stack[#page_stack + 1] = page_key
         render_menu()
     end
+end
+
+local function maybe_open_hovered_submenu()
+    clear_submenu_hover()
+    if not submenu_hover_ready() then
+        return
+    end
+
+    local page_key = current_page_key()
+    local page = build_page(page_key)
+    local state = ensure_page_state(page_key)
+    local hovered = state.hovered
+    local choice = page.choices and hovered and page.choices[hovered] or nil
+    local submenu_page = choice and choice.submenu_page or nil
+
+    if not submenu_page or submenu_page == page_key then
+        return
+    end
+
+    local target = page_key .. ":" .. tostring(hovered) .. ":" .. submenu_page
+    submenu_hover_target = target
+    submenu_hover_timer = mp.add_timeout(math.max(0.04, tonumber(options.submenu_hover_delay) or 0.10), function()
+        submenu_hover_timer = nil
+        if not menu_open or current_page_key() ~= page_key then
+            submenu_hover_target = nil
+            return
+        end
+
+        local current_state = ensure_page_state(page_key)
+        if current_state.hovered ~= hovered then
+            submenu_hover_target = nil
+            return
+        end
+
+        current_state.selected = hovered
+        if invoke_action(choice.action) then
+            arm_submenu_hover()
+        else
+            close_menu()
+        end
+        submenu_hover_target = nil
+    end)
 end
 
 local function close_after(action)
@@ -955,44 +1047,52 @@ local function open_root_choices()
         {
             label = "Playlist",
             value = current_playlist_summary(),
+            submenu_page = PAGE_PLAYLIST,
             action = submenu_action(PAGE_PLAYLIST),
         },
         {
             label = "Chapters",
             value = current_chapter_summary(),
             muted = #chapter_entries() == 0,
+            submenu_page = PAGE_CHAPTERS,
             action = submenu_action(PAGE_CHAPTERS),
         },
         {
             label = "Audio",
             value = current_audio_summary(),
+            submenu_page = PAGE_AUDIO,
             action = submenu_action(PAGE_AUDIO),
         },
         {
             label = "Subtitles",
             value = current_subtitle_summary(),
+            submenu_page = PAGE_SUBTITLE,
             action = submenu_action(PAGE_SUBTITLE),
         },
         {
             label = "Playback",
             value = (mp.get_property_bool("pause") and "Paused" or "Playing") .. " | " .. format_speed(mp.get_property_number("speed", 1)),
             value_share = 0.62,
+            submenu_page = PAGE_PLAYBACK,
             action = submenu_action(PAGE_PLAYBACK),
         },
         {
             label = "Video",
             value = current_video_summary(),
             muted = #video_tracks() == 0,
+            submenu_page = PAGE_VIDEO,
             action = submenu_action(PAGE_VIDEO),
         },
         {
             label = "Window",
             value = current_window_summary(),
+            submenu_page = PAGE_WINDOW,
             action = submenu_action(PAGE_WINDOW),
         },
         {
             label = "Tools",
             value = current_tools_summary(),
+            submenu_page = PAGE_TOOLS,
             action = submenu_action(PAGE_TOOLS),
         },
         {
@@ -1391,6 +1491,7 @@ local function subtitle_page_choices()
             label = "Mode",
             value = string.upper(mode),
             value_color = "accent",
+            submenu_page = PAGE_SUBTITLE_MODE,
             action = submenu_action(PAGE_SUBTITLE_MODE),
         },
         {
@@ -1399,6 +1500,7 @@ local function subtitle_page_choices()
             value_share = 0.72,
             muted = mode == "off",
             value_color = mode == "off" and "muted" or "text",
+            submenu_page = PAGE_SUBTITLE_PRIMARY,
             action = submenu_action(PAGE_SUBTITLE_PRIMARY),
         },
         {
@@ -1407,6 +1509,7 @@ local function subtitle_page_choices()
             value_share = 0.72,
             muted = secondary_muted,
             value_color = secondary_muted and "muted" or "text",
+            submenu_page = PAGE_SUBTITLE_SECONDARY,
             action = submenu_action(PAGE_SUBTITLE_SECONDARY),
         },
         {
@@ -1607,6 +1710,7 @@ local function build_playback_page()
         {
             label = "Speed Presets",
             value = format_speed(mp.get_property_number("speed", 1)),
+            submenu_page = PAGE_SPEED,
             action = submenu_action(PAGE_SPEED),
         },
         {
@@ -1747,6 +1851,7 @@ local function build_video_page()
             label = "Aspect Ratio",
             value = aspect_summary(),
             muted = not has_video,
+            submenu_page = has_video and PAGE_VIDEO_ASPECT or nil,
             action = has_video and submenu_action(PAGE_VIDEO_ASPECT) or nil,
         },
         {
@@ -2036,7 +2141,7 @@ local function resolve_menu_position(page)
         return x, y
     end
 
-    if current_page_key() == PAGE_PLAYLIST then
+    if (page.key or current_page_key()) == PAGE_PLAYLIST then
         if mouse_y > (osd_height * 0.75) then
             y = mouse_y - panel_height - 32
         end
@@ -2068,6 +2173,137 @@ local function resolve_menu_position(page)
     return x, y
 end
 
+local function row_offset_for_choice(page, choice_index)
+    local offset = 0
+    for _, row in ipairs(page.rows or {}) do
+        if row.choice_index == choice_index then
+            return offset
+        end
+        offset = offset + ui:block_height(row)
+    end
+    return 0
+end
+
+local function panel_bounds_at(index)
+    local bounds = ui.panel_bounds and ui.panel_bounds[index] or nil
+    return bounds
+end
+
+local function point_in_rect(x, y, rect)
+    return rect
+        and x >= rect.x1 and x <= rect.x2
+        and y >= rect.y1 and y <= rect.y2
+end
+
+local function bridge_depth_for_point(x, y)
+    if type(ui.panel_bounds) ~= "table" or #ui.panel_bounds < 2 then
+        return nil
+    end
+
+    for depth = 1, (#ui.panel_bounds - 1) do
+        local parent_bounds = ui.panel_bounds[depth]
+        local child_bounds = ui.panel_bounds[depth + 1]
+        if parent_bounds and child_bounds then
+            local corridor
+            if child_bounds.x1 >= parent_bounds.x2 then
+                corridor = {
+                    x1 = parent_bounds.x2 - 10,
+                    x2 = child_bounds.x1 + 22,
+                    y1 = math.min(parent_bounds.y1, child_bounds.y1) - 14,
+                    y2 = math.max(parent_bounds.y2, child_bounds.y2) + 14,
+                }
+            else
+                corridor = {
+                    x1 = child_bounds.x2 - 22,
+                    x2 = parent_bounds.x1 + 10,
+                    y1 = math.min(parent_bounds.y1, child_bounds.y1) - 14,
+                    y2 = math.max(parent_bounds.y2, child_bounds.y2) + 14,
+                }
+            end
+
+            if point_in_rect(x, y, corridor) then
+                return depth
+            end
+        end
+    end
+
+    return nil
+end
+
+local function build_panel_specs()
+    local specs = {}
+    local pages = {}
+    local root_key = page_key_at(1)
+    local root_page = build_page(root_key)
+    root_page.key = root_key
+    pages[1] = root_page
+
+    local root_left, root_top = resolve_menu_position(root_page)
+    local osd_width, osd_height = ui:get_osd_size()
+    local gap = 4
+    local lefts = { root_left }
+    local tops = { root_top }
+
+    specs[1] = {
+        title = root_page.title,
+        badge = root_page.badge,
+        panel_chars = root_page.panel_chars,
+        rows = root_page.rows,
+        footer = root_page.footer,
+        left = root_left,
+        top = root_top,
+    }
+
+    for depth = 2, #page_stack do
+        local page_key = page_key_at(depth)
+        local page = build_page(page_key)
+        page.key = page_key
+        pages[depth] = page
+
+        local parent_page = pages[depth - 1]
+        local parent_key = parent_page.key
+        local parent_state = ensure_page_state(parent_key)
+        local anchor_choice = parent_state.hovered or parent_state.selected or 1
+        local parent_width, _ = ui:measure_panel({
+            panel_chars = parent_page.panel_chars,
+            rows = parent_page.rows,
+            footer = parent_page.footer,
+        })
+        local child_width, child_height = ui:measure_panel({
+            panel_chars = page.panel_chars,
+            rows = page.rows,
+            footer = page.footer,
+        })
+        local item_y = tops[depth - 1]
+            + ui.theme.padding_y
+            + ui.theme.header_height
+            + row_offset_for_choice(parent_page, anchor_choice)
+        local anchor_center_y = item_y + math.floor(ui.theme.row_height / 2)
+        local preferred_left = lefts[depth - 1] + parent_width + gap
+        local child_left = preferred_left
+        if preferred_left + child_width > (osd_width - 12) then
+            child_left = lefts[depth - 1] - child_width - gap
+        end
+        child_left = clamp(child_left, 12, math.max(12, osd_width - child_width - 12))
+        local desired_child_top = anchor_center_y - (ui.theme.padding_y + ui.theme.header_height + math.floor(ui.theme.row_height / 2))
+        local child_top = clamp(desired_child_top, 12, math.max(12, osd_height - child_height - 12))
+
+        lefts[depth] = child_left
+        tops[depth] = child_top
+        specs[depth] = {
+            title = page.title,
+            badge = page.badge,
+            panel_chars = page.panel_chars,
+            rows = page.rows,
+            footer = page.footer,
+            left = child_left,
+            top = child_top,
+        }
+    end
+
+    return specs
+end
+
 local function update_anchor_from_mouse()
     local x, y = mp.get_mouse_pos()
     if x and y and x >= 0 and y >= 0 then
@@ -2096,10 +2332,36 @@ local function activate_current_choice()
     end
 end
 
+local function normalize_page_key(page_key)
+    local target = compact_text(page_key or "")
+    if target == "" then
+        return PAGE_ROOT
+    end
+    return target
+end
+
+local function set_page_target(page_key)
+    local target = normalize_page_key(page_key)
+
+    page_stack = { PAGE_ROOT }
+    clear_page_hover(PAGE_ROOT)
+    if target ~= PAGE_ROOT then
+        if target == PAGE_PLAYLIST then
+            seed_playlist_selection()
+        end
+        clear_page_hover(target)
+        page_stack[#page_stack + 1] = target
+    end
+
+    return target
+end
+
 local function open_menu(page_key)
-    page_key = page_key or PAGE_ROOT
+    page_key = normalize_page_key(page_key)
     local was_open = menu_open
 
+    clear_submenu_hover()
+    arm_submenu_hover()
     update_anchor_from_mouse()
     mp.commandv("script-message", "audio-menu-close")
     mp.commandv("script-message", "subtitle-menu-close")
@@ -2110,15 +2372,7 @@ local function open_menu(page_key)
     if not was_open then
         mp.commandv("script-message", "menu-guard-acquire", "context-menu")
     end
-    page_stack = { PAGE_ROOT }
-    clear_page_hover(PAGE_ROOT)
-    if page_key ~= PAGE_ROOT then
-        if page_key == PAGE_PLAYLIST then
-            seed_playlist_selection()
-        end
-        clear_page_hover(page_key)
-        page_stack[#page_stack + 1] = page_key
-    end
+    set_page_target(page_key)
 
     if was_open and bindings_registered then
         render_menu()
@@ -2154,6 +2408,8 @@ local function open_menu(page_key)
     mp.add_forced_key_binding("LEFT", "context-menu-left", function()
         clear_page_hover(current_page_key())
         if #page_stack > 1 then
+            clear_submenu_hover()
+            arm_submenu_hover()
             table.remove(page_stack)
             render_menu()
         else
@@ -2172,17 +2428,45 @@ local function open_menu(page_key)
             return
         end
 
-        local hit = ui:handle_click(x, y)
-        if hit == "outside" then
+        local hit = ui:hit_test(x, y)
+        if hit.kind == "outside" then
             close_menu()
-        elseif hit == "inside" then
+            return
+        end
+
+        if hit.kind == "inside" then
             reset_close_timer()
+            return
+        end
+
+        local panel_index = hit.panel_index or #page_stack
+        local page_key = page_key_at(panel_index)
+        local state = ensure_page_state(page_key)
+        trim_page_stack(panel_index)
+        state.selected = hit.row_index
+        state.hovered = hit.row_index
+        if hit.action then
+            invoke_action(hit.action)
+        else
+            render_menu()
         end
     end)
 
     mp.add_forced_key_binding("MBTN_RIGHT", "context-menu-mouse-right", function()
+        local x, y = mp.get_mouse_pos()
+        local hit = (x and y) and ui:hit_test(x, y) or { kind = "outside" }
+
+        if hit.kind ~= "outside" then
+            if (hit.panel_index or #page_stack) > 1 then
+                trim_page_stack((hit.panel_index or #page_stack) - 1)
+                render_menu()
+            else
+                close_menu()
+            end
+            return
+        end
+
         update_anchor_from_mouse()
-        clear_page_hover(current_page_key())
         render_menu()
     end)
 
@@ -2193,17 +2477,60 @@ local function open_menu(page_key)
         end
 
         local hit = ui:hit_test(x, y)
-        local state = ensure_page_state(current_page_key())
+        if hit.kind == "outside" then
+            local bridge_depth = bridge_depth_for_point(x, y)
+            if bridge_depth then
+                reset_close_timer()
+                return
+            end
+            reset_close_timer()
+            return
+        end
+
+        local panel_index = hit.panel_index or #page_stack
+        local page_key = page_key_at(panel_index)
+        local state = ensure_page_state(page_key)
         local hovered = hit.kind == "item" and hit.row_index or nil
+        local panel_changed = false
 
         if state.hovered ~= hovered then
             state.hovered = hovered
-            render_menu(true)
+            panel_changed = true
         end
 
-        if hit.kind ~= "outside" then
+        if hit.kind == "inside" then
+            if panel_changed then
+                render_menu(true)
+            end
             reset_close_timer()
+            return
         end
+
+        if hovered then
+            local page = build_page(page_key)
+            local choice = page.choices and page.choices[hovered] or nil
+            state.selected = hovered
+            if choice and choice.submenu_page then
+                local existing_next = page_key_at(panel_index + 1)
+                if panel_index + 1 < #page_stack or existing_next ~= choice.submenu_page then
+                    trim_page_stack(panel_index)
+                    if choice.submenu_page == PAGE_PLAYLIST then
+                        seed_playlist_selection()
+                    end
+                    page_stack[#page_stack + 1] = choice.submenu_page
+                    clear_page_hover(choice.submenu_page)
+                    panel_changed = true
+                end
+            elseif panel_index < #page_stack then
+                trim_page_stack(panel_index)
+                panel_changed = true
+            end
+        end
+
+        if panel_changed then
+            render_menu(true)
+        end
+        reset_close_timer()
     end, { complex = true })
 
     mp.add_forced_key_binding("WHEEL_UP", "context-menu-wheel-up", function()
@@ -2245,14 +2572,31 @@ local function open_menu(page_key)
 end
 
 local function open_menu_here()
+    local target = menu_open and current_page_key() or PAGE_ROOT
     if menu_open then
+        clear_submenu_hover()
+        arm_submenu_hover()
         update_anchor_from_mouse()
         clear_page_hover(current_page_key())
         render_menu()
         return
     end
 
-    open_menu(PAGE_ROOT)
+    open_menu(target)
+end
+
+local function open_menu_target_here(page_key)
+    local target = normalize_page_key(page_key)
+    if menu_open then
+        clear_submenu_hover()
+        arm_submenu_hover()
+        update_anchor_from_mouse()
+        set_page_target(target)
+        render_menu()
+        return
+    end
+
+    open_menu(target)
 end
 
 local function toggle_menu()
@@ -2268,17 +2612,8 @@ render_menu = function(skip_close_reset)
         return
     end
 
-    local page = build_page(current_page_key())
-    local left, top = resolve_menu_position(page)
-    ui:render({
-        title = page.title,
-        badge = page.badge,
-        panel_chars = page.panel_chars,
-        rows = page.rows,
-        footer = page.footer,
-        left = left,
-        top = top,
-    })
+    local specs = build_panel_specs()
+    ui:render_panels(specs)
 
     if current_page_key() ~= PAGE_PLAYLIST then
         stop_playlist_marquee()
@@ -2290,18 +2625,16 @@ render_menu = function(skip_close_reset)
 end
 
 mp.register_script_message("context-menu-open", function()
-    open_menu(PAGE_ROOT)
+    open_menu_target_here(PAGE_ROOT)
 end)
 
 mp.register_script_message("context-menu-open-here", open_menu_here)
 
 mp.register_script_message("context-menu-open-page", function(page_key)
-    local target = compact_text(page_key or "")
-    if target == "" then
-        target = PAGE_ROOT
-    end
-    open_menu(target)
+    open_menu_target_here(page_key)
 end)
+
+mp.register_script_message("context-menu-open-page-here", open_menu_target_here)
 
 mp.register_script_message("context-menu-toggle", toggle_menu)
 mp.register_script_message("context-menu-close", close_menu)

@@ -25,6 +25,7 @@ local overlay = mp.create_osd_overlay("ass-events")
 local ui = menu_ui.new(overlay, options)
 local menu_open = false
 local selected_index = 1
+local hovered_index = nil
 local close_timer = nil
 local render_menu
 
@@ -165,6 +166,7 @@ local function close_menu()
         mp.commandv("script-message", "menu-guard-release", "chapter-menu")
     end
     menu_open = false
+    hovered_index = nil
     ui:clear()
     mp.remove_key_binding("chapter-menu-up")
     mp.remove_key_binding("chapter-menu-down")
@@ -176,6 +178,8 @@ local function close_menu()
     mp.remove_key_binding("chapter-menu-kp-enter")
     mp.remove_key_binding("chapter-menu-escape")
     mp.remove_key_binding("chapter-menu-mouse-left")
+    mp.remove_key_binding("chapter-menu-mouse-right")
+    mp.remove_key_binding("chapter-menu-mouse-move")
 end
 
 local function reset_close_timer()
@@ -194,6 +198,7 @@ local function move_selection(step)
     end
 
     selected_index = ((selected_index - 1 + step) % #entries) + 1
+    hovered_index = nil
     render_menu()
 end
 
@@ -258,8 +263,10 @@ render_menu = function()
                 label = display_chapter_name(chapter),
                 value = format_time(chapter.time),
                 selected = index == selected_index,
+                hovered = index == hovered_index and index ~= selected_index,
                 value_color = is_current and "accent" or "muted",
                 badge = is_current and "NOW" or nil,
+                choice_index = index,
                 action = function()
                     apply_selection(index)
                 end,
@@ -274,8 +281,8 @@ render_menu = function()
         end
 
         footer = {
-            "Arrows or Wheel move the cursor",
-            "Enter or Click jumps | Esc closes",
+            "Hover, Arrows, or Wheel moves",
+            "Click jumps | Right click or Esc closes",
         }
     end
 
@@ -306,6 +313,24 @@ local function bind_navigation_keys()
             reset_close_timer()
         end
     end)
+    mp.add_forced_key_binding("MBTN_RIGHT", "chapter-menu-mouse-right", close_menu)
+    mp.add_forced_key_binding("mouse_move", "chapter-menu-mouse-move", function()
+        local x, y = mp.get_mouse_pos()
+        if not x or not y then
+            return
+        end
+
+        local hit = ui:hit_test(x, y)
+        local hovered = hit.kind == "item" and hit.row_index or nil
+        if hovered_index ~= hovered then
+            hovered_index = hovered
+            render_menu()
+        end
+
+        if hit.kind ~= "outside" then
+            reset_close_timer()
+        end
+    end, { complex = true })
     mp.add_forced_key_binding("WHEEL_UP", "chapter-menu-wheel-up", function() move_selection(-1) end, { repeatable = true })
     mp.add_forced_key_binding("WHEEL_DOWN", "chapter-menu-wheel-down", function() move_selection(1) end, { repeatable = true })
     mp.add_forced_key_binding("ENTER", "chapter-menu-enter", apply_selection)
@@ -323,6 +348,7 @@ local function open_menu()
     mp.commandv("script-message", "audio-menu-close")
     mp.commandv("script-message", "subtitle-menu-close")
     menu_open = true
+    hovered_index = nil
     mp.commandv("script-message", "menu-guard-acquire", "chapter-menu")
     sync_selected_index(chapter_entries())
     bind_navigation_keys()

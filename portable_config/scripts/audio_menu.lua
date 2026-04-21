@@ -25,6 +25,7 @@ local overlay = mp.create_osd_overlay("ass-events")
 local ui = menu_ui.new(overlay, options)
 local menu_open = false
 local selected_index = 1
+local hovered_index = nil
 local close_timer = nil
 local render_menu
 
@@ -185,6 +186,7 @@ local function close_menu()
         mp.commandv("script-message", "menu-guard-release", "audio-menu")
     end
     menu_open = false
+    hovered_index = nil
     ui:clear()
     mp.remove_key_binding("audio-menu-up")
     mp.remove_key_binding("audio-menu-down")
@@ -196,6 +198,8 @@ local function close_menu()
     mp.remove_key_binding("audio-menu-kp-enter")
     mp.remove_key_binding("audio-menu-escape")
     mp.remove_key_binding("audio-menu-mouse-left")
+    mp.remove_key_binding("audio-menu-mouse-right")
+    mp.remove_key_binding("audio-menu-mouse-move")
 end
 
 local function reset_close_timer()
@@ -213,6 +217,7 @@ local function move_selection(step)
     end
 
     selected_index = ((selected_index - 1 + step) % #choices) + 1
+    hovered_index = nil
     render_menu()
 end
 
@@ -280,8 +285,10 @@ render_menu = function()
             rows[#rows + 1] = {
                 label = choice.label,
                 selected = index == selected_index,
+                hovered = index == hovered_index and index ~= selected_index,
                 muted = choice.muted == true,
                 badge = current and "ACTIVE" or nil,
+                choice_index = index,
                 action = function()
                     apply_selection(index)
                 end,
@@ -296,8 +303,8 @@ render_menu = function()
         end
 
         footer = {
-            "Arrows or Wheel move the cursor",
-            "Enter or Click applies | Esc closes",
+            "Hover, Arrows, or Wheel moves",
+            "Click applies | Right click or Esc closes",
         }
     end
 
@@ -328,6 +335,24 @@ local function bind_navigation_keys()
             reset_close_timer()
         end
     end)
+    mp.add_forced_key_binding("MBTN_RIGHT", "audio-menu-mouse-right", close_menu)
+    mp.add_forced_key_binding("mouse_move", "audio-menu-mouse-move", function()
+        local x, y = mp.get_mouse_pos()
+        if not x or not y then
+            return
+        end
+
+        local hit = ui:hit_test(x, y)
+        local hovered = hit.kind == "item" and hit.row_index or nil
+        if hovered_index ~= hovered then
+            hovered_index = hovered
+            render_menu()
+        end
+
+        if hit.kind ~= "outside" then
+            reset_close_timer()
+        end
+    end, { complex = true })
     mp.add_forced_key_binding("WHEEL_UP", "audio-menu-wheel-up", function() move_selection(-1) end, { repeatable = true })
     mp.add_forced_key_binding("WHEEL_DOWN", "audio-menu-wheel-down", function() move_selection(1) end, { repeatable = true })
     mp.add_forced_key_binding("ENTER", "audio-menu-enter", apply_selection)
@@ -345,6 +370,7 @@ local function open_menu()
     mp.commandv("script-message", "chapter-menu-close")
     mp.commandv("script-message", "context-menu-close")
     menu_open = true
+    hovered_index = nil
     mp.commandv("script-message", "menu-guard-acquire", "audio-menu")
     sync_selected_index(audio_tracks())
     bind_navigation_keys()

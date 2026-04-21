@@ -28,7 +28,10 @@ local menu_open = false
 local selected_row = 1
 local picker_kind = nil
 local picker_index = 1
+local hovered_row = nil
+local hovered_picker_index = nil
 local close_timer = nil
+local hover_open_timer = nil
 local render_menu
 
 local function compact_text(text)
@@ -113,18 +116,29 @@ local function clear_close_timer()
     end
 end
 
+local function clear_hover_open_timer()
+    if hover_open_timer then
+        hover_open_timer:kill()
+        hover_open_timer = nil
+    end
+end
+
 local function close_picker()
+    clear_hover_open_timer()
     picker_kind = nil
     picker_index = 1
+    hovered_picker_index = nil
 end
 
 local function close_menu()
     clear_close_timer()
+    clear_hover_open_timer()
     if menu_open then
         mp.commandv("script-message", "menu-guard-release", "subtitle-menu")
     end
     menu_open = false
     close_picker()
+    hovered_row = nil
     ui:clear()
     mp.remove_key_binding("subtitle-menu-up")
     mp.remove_key_binding("subtitle-menu-down")
@@ -136,6 +150,8 @@ local function close_menu()
     mp.remove_key_binding("subtitle-menu-kp-enter")
     mp.remove_key_binding("subtitle-menu-escape")
     mp.remove_key_binding("subtitle-menu-mouse-left")
+    mp.remove_key_binding("subtitle-menu-mouse-right")
+    mp.remove_key_binding("subtitle-menu-mouse-move")
 end
 
 local function reset_close_timer()
@@ -394,6 +410,8 @@ local function open_picker(kind)
         selected_row = 3
     end
 
+    clear_hover_open_timer()
+    hovered_picker_index = nil
     picker_kind = kind
     picker_index = 1
     set_picker_index_for_current(tracks)
@@ -429,6 +447,7 @@ local function move_picker(step)
     end
 
     picker_index = ((picker_index - 1 + step) % #choices) + 1
+    hovered_picker_index = nil
     render_menu()
 end
 
@@ -472,6 +491,54 @@ local function apply_picker_selection(close_after)
     render_menu()
 end
 
+local function subtitle_row_offset(rows, choice_index)
+    local offset = 0
+    for _, row in ipairs(rows or {}) do
+        if row.choice_index == choice_index then
+            return offset
+        end
+        offset = offset + ui:block_height(row)
+    end
+    return 0
+end
+
+local function subtitle_panel_bounds_at(index)
+    return ui.panel_bounds and ui.panel_bounds[index] or nil
+end
+
+local function subtitle_point_in_rect(x, y, rect)
+    return rect
+        and x >= rect.x1 and x <= rect.x2
+        and y >= rect.y1 and y <= rect.y2
+end
+
+local function subtitle_bridge_active(x, y)
+    local root_bounds = subtitle_panel_bounds_at(1)
+    local child_bounds = subtitle_panel_bounds_at(2)
+    if not root_bounds or not child_bounds then
+        return false
+    end
+
+    local corridor
+    if child_bounds.x1 >= root_bounds.x2 then
+        corridor = {
+            x1 = root_bounds.x2 - 10,
+            x2 = child_bounds.x1 + 22,
+            y1 = math.min(root_bounds.y1, child_bounds.y1) - 14,
+            y2 = math.max(root_bounds.y2, child_bounds.y2) + 14,
+        }
+    else
+        corridor = {
+            x1 = child_bounds.x2 - 22,
+            x2 = root_bounds.x1 + 10,
+            y1 = math.min(root_bounds.y1, child_bounds.y1) - 14,
+            y2 = math.max(root_bounds.y2, child_bounds.y2) + 14,
+        }
+    end
+
+    return subtitle_point_in_rect(x, y, corridor)
+end
+
 render_menu = function()
     if not menu_open then
         return
@@ -489,89 +556,28 @@ render_menu = function()
 
     local primary = #tracks > 0 and ensure_primary_track(tracks) or nil
     local secondary = mode == "dual" and find_track_by_id(mp.get_property_number("secondary-sid", -1), tracks) or nil
-    local rows = {}
-    local footer
+    local root_rows = {}
+    local root_footer
 
     if #tracks == 0 then
-        rows[#rows + 1] = {
+        root_rows[#root_rows + 1] = {
             kind = "note",
             text = "No subtitle tracks available in this file.",
             bold = true,
         }
-        footer = {
+        root_footer = {
             "Esc closes",
         }
-        ui:render({
-            title = "Subtitles",
-            badge = "none",
-            rows = rows,
-            footer = footer,
-        })
-        reset_close_timer()
-        return
-    end
 
-    if picker_kind then
-        local choices = picker_choices(picker_kind, tracks)
-        local first_index, last_index = picker_window(#choices)
-        local active_id = current_choice_id(picker_kind, tracks)
-
-        if picker_kind == "secondary" and primary then
-            rows[#rows + 1] = {
-                kind = "section",
-                text = "Primary locked",
-            }
-            rows[#rows + 1] = {
-                kind = "note",
-                text = display_track_name(primary),
-            }
-        end
-
-        if first_index > 1 then
-            rows[#rows + 1] = {
-                kind = "note",
-                text = "More choices above",
-            }
-        end
-
-        for index = first_index, last_index do
-            local choice = choices[index]
-            local current = (choice.id == false and active_id == false)
-                or (choice.id ~= false and tostring(choice.id) == tostring(active_id))
-
-            rows[#rows + 1] = {
-                label = choice.label,
-                value = choice.value,
-                selected = index == picker_index,
-                muted = choice.muted == true,
-                value_color = choice.muted == true and "muted" or nil,
-                badge = current and "ACTIVE" or nil,
-                action = function()
-                    picker_index = index
-                    apply_picker_selection(true)
-                end,
-            }
-        end
-
-        if last_index < #choices then
-            rows[#rows + 1] = {
-                kind = "note",
-                text = "More choices below",
-            }
-        end
-
-        footer = {
-            "Up/Down move | Left back",
-            "Enter or Click applies | Esc back",
-        }
-
-        ui:render({
-            title = picker_kind == "mode"
-                and "Subtitle Mode"
-                or (picker_kind == "primary" and "Primary Subtitle" or "Secondary Subtitle"),
-            badge = picker_kind == "mode" and string.upper(mode) or picker_kind,
-            rows = rows,
-            footer = footer,
+        ui:render_panels({
+            {
+                title = "Subtitles",
+                badge = "none",
+                rows = root_rows,
+                footer = root_footer,
+                left = tonumber(options.left) or 36,
+                top = tonumber(options.top) or 44,
+            },
         })
         reset_close_timer()
         return
@@ -591,37 +597,43 @@ render_menu = function()
         secondary_value = "Ready when Dual is used"
     end
 
-    rows[#rows + 1] = {
+    root_rows[#root_rows + 1] = {
         label = "Mode",
         value = string.upper(mode),
         selected = selected_row == 1,
+        hovered = hovered_row == 1 and selected_row ~= 1,
         value_color = "accent",
+        choice_index = 1,
         action = function()
             selected_row = 1
             open_picker("mode")
             render_menu()
         end,
     }
-    rows[#rows + 1] = {
+    root_rows[#root_rows + 1] = {
         label = "Primary",
         value = primary_value,
         value_share = 0.72,
         selected = selected_row == 2,
+        hovered = hovered_row == 2 and selected_row ~= 2,
         muted = primary_muted,
         value_color = primary_muted and "muted" or "text",
+        choice_index = 2,
         action = function()
             selected_row = 2
             open_picker("primary")
             render_menu()
         end,
     }
-    rows[#rows + 1] = {
+    root_rows[#root_rows + 1] = {
         label = "Secondary",
         value = secondary_value,
         value_share = 0.72,
         selected = selected_row == 3,
+        hovered = hovered_row == 3 and selected_row ~= 3,
         muted = secondary_muted,
         value_color = secondary_muted and "muted" or "text",
+        choice_index = 3,
         action = function()
             selected_row = 3
             open_picker("secondary")
@@ -629,17 +641,118 @@ render_menu = function()
         end,
     }
 
-    footer = {
-        "Up/Down move | Right opens",
-        "Enter applies in submenu | Esc closes",
+    root_footer = {
+        "Hover opens the side panel | Enter or Right opens",
+        "Right click goes back | Esc closes",
     }
 
-    ui:render({
+    local root_spec = {
         title = "Subtitles",
         badge = tostring(#tracks) .. (#tracks == 1 and " track" or " tracks"),
-        rows = rows,
-        footer = footer,
-    })
+        rows = root_rows,
+        footer = root_footer,
+        left = tonumber(options.left) or 36,
+        top = tonumber(options.top) or 44,
+    }
+
+    local specs = { root_spec }
+
+    if picker_kind then
+        local picker_rows = {}
+        local picker_footer
+        local choices = picker_choices(picker_kind, tracks)
+        local first_index, last_index = picker_window(#choices)
+        local active_id = current_choice_id(picker_kind, tracks)
+
+        if picker_kind == "secondary" and primary then
+            picker_rows[#picker_rows + 1] = {
+                kind = "section",
+                text = "Primary locked",
+            }
+            picker_rows[#picker_rows + 1] = {
+                kind = "note",
+                text = display_track_name(primary),
+            }
+        end
+
+        if first_index > 1 then
+            picker_rows[#picker_rows + 1] = {
+                kind = "note",
+                text = "More choices above",
+            }
+        end
+
+        for index = first_index, last_index do
+            local choice = choices[index]
+            local current = (choice.id == false and active_id == false)
+                or (choice.id ~= false and tostring(choice.id) == tostring(active_id))
+
+            picker_rows[#picker_rows + 1] = {
+                label = choice.label,
+                value = choice.value,
+                selected = index == picker_index,
+                hovered = index == hovered_picker_index and index ~= picker_index,
+                muted = choice.muted == true,
+                value_color = choice.muted == true and "muted" or nil,
+                badge = current and "ACTIVE" or nil,
+                choice_index = index,
+                action = function()
+                    picker_index = index
+                    apply_picker_selection(true)
+                end,
+            }
+        end
+
+        if last_index < #choices then
+            picker_rows[#picker_rows + 1] = {
+                kind = "note",
+                text = "More choices below",
+            }
+        end
+
+        picker_footer = {
+            "Hover highlights | Click applies",
+            "Right click, Left arrow, or Esc goes back",
+        }
+
+        local root_width, _ = ui:measure_panel(root_spec)
+        local picker_spec = {
+            title = picker_kind == "mode"
+                and "Subtitle Mode"
+                or (picker_kind == "primary" and "Primary Subtitle" or "Secondary Subtitle"),
+            badge = picker_kind == "mode" and string.upper(mode) or picker_kind,
+            rows = picker_rows,
+            footer = picker_footer,
+        }
+        local picker_width, picker_height = ui:measure_panel(picker_spec)
+        local osd_width, osd_height = ui:get_osd_size()
+        local gap = 4
+        local anchor_row = picker_kind == "mode" and 1 or (picker_kind == "primary" and 2 or 3)
+        local item_y = root_spec.top
+            + ui.theme.padding_y
+            + ui.theme.header_height
+            + subtitle_row_offset(root_rows, anchor_row)
+        local anchor_center_y = item_y + math.floor(ui.theme.row_height / 2)
+        local preferred_left = root_spec.left + root_width + gap
+        local picker_left = preferred_left
+        if preferred_left + picker_width > (osd_width - 12) then
+            picker_left = root_spec.left - picker_width - gap
+        end
+        picker_left = math.max(12, math.min(picker_left, osd_width - picker_width - 12))
+        local picker_top = math.max(
+            12,
+            math.min(
+                anchor_center_y - (ui.theme.padding_y + ui.theme.header_height + math.floor(ui.theme.row_height / 2)),
+                osd_height - picker_height - 12
+            )
+        )
+
+        picker_spec.left = picker_left
+        picker_spec.top = picker_top
+        specs[2] = picker_spec
+    end
+
+    ui:render_panels(specs)
     reset_close_timer()
 end
 
@@ -651,6 +764,7 @@ local function move_selection(step)
 
     local row_count = #subtitle_tracks() > 0 and 3 or 1
     selected_row = ((selected_row - 1 + step) % row_count) + 1
+    hovered_row = nil
     render_menu()
 end
 
@@ -671,13 +785,38 @@ local function open_selected_picker()
     render_menu()
 end
 
+local function schedule_hover_picker(row_index)
+    clear_hover_open_timer()
+    if picker_kind or not row_index then
+        return
+    end
+
+    local tracks = subtitle_tracks()
+    if #tracks == 0 then
+        return
+    end
+    if row_index == 3 and #tracks < 2 then
+        return
+    end
+
+    hover_open_timer = mp.add_timeout(0.05, function()
+        hover_open_timer = nil
+        if not menu_open or picker_kind or hovered_row ~= row_index then
+            return
+        end
+
+        selected_row = row_index
+        open_selected_picker()
+    end)
+end
+
 local function activate_selection()
     if picker_kind then
         apply_picker_selection(true)
         return
     end
 
-    reset_close_timer()
+    open_selected_picker()
 end
 
 local function escape_menu()
@@ -727,6 +866,72 @@ local function bind_navigation_keys()
             reset_close_timer()
         end
     end)
+    mp.add_forced_key_binding("MBTN_RIGHT", "subtitle-menu-mouse-right", function()
+        if picker_kind then
+            close_picker()
+            render_menu()
+            return
+        end
+
+        close_menu()
+    end)
+    mp.add_forced_key_binding("mouse_move", "subtitle-menu-mouse-move", function()
+        local x, y = mp.get_mouse_pos()
+        if not x or not y then
+            return
+        end
+
+        local hit = ui:hit_test(x, y)
+        if hit.kind == "outside" then
+            if subtitle_bridge_active(x, y) then
+                reset_close_timer()
+                return
+            end
+            clear_hover_open_timer()
+            reset_close_timer()
+            return
+        end
+
+        local panel_index = hit.panel_index or 1
+        local hovered = hit.kind == "item" and hit.row_index or nil
+
+        if panel_index == 2 then
+            if hovered_picker_index ~= hovered then
+                hovered_picker_index = hovered
+                render_menu()
+            end
+            reset_close_timer()
+            return
+        end
+
+        local changed = false
+        if hovered_row ~= hovered then
+            hovered_row = hovered
+            changed = true
+        end
+
+        if hovered then
+            selected_row = hovered
+            local target_kind = hovered == 1 and "mode" or (hovered == 2 and "primary" or "secondary")
+            if not (target_kind == "secondary" and #subtitle_tracks() < 2) then
+                if picker_kind ~= target_kind then
+                    open_picker(target_kind)
+                    render_menu()
+                    reset_close_timer()
+                    return
+                end
+            elseif picker_kind then
+                close_picker()
+                render_menu()
+                reset_close_timer()
+                return
+            end
+        elseif changed then
+            render_menu()
+        end
+
+        reset_close_timer()
+    end, { complex = true })
     mp.add_forced_key_binding("WHEEL_UP", "subtitle-menu-wheel-up", function() move_selection(-1) end, { repeatable = true })
     mp.add_forced_key_binding("WHEEL_DOWN", "subtitle-menu-wheel-down", function() move_selection(1) end, { repeatable = true })
     mp.add_forced_key_binding("ENTER", "subtitle-menu-enter", activate_selection)
@@ -746,6 +951,8 @@ local function open_menu()
     menu_open = true
     mp.commandv("script-message", "menu-guard-acquire", "subtitle-menu")
     close_picker()
+    hovered_row = nil
+    hovered_picker_index = nil
     selected_row = 1
     bind_navigation_keys()
     render_menu()
