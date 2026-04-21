@@ -31,6 +31,7 @@ require "mp.options".read_options(options, "context_menu")
 local overlay = mp.create_osd_overlay("ass-events")
 local ui = menu_ui.new(overlay, options)
 local shared_state_path = "user-data/subtitle_auto/state"
+local open_state_path = "user-data/context_menu/open"
 
 local menu_open = false
 local close_timer = nil
@@ -167,6 +168,7 @@ close_menu = function()
     menu_open = false
     bindings_registered = false
     page_stack = {}
+    mp.set_property_native(open_state_path, false)
     ui:clear()
     mp.remove_key_binding("context-menu-up")
     mp.remove_key_binding("context-menu-down")
@@ -181,6 +183,8 @@ close_menu = function()
     mp.remove_key_binding("context-menu-mouse-right")
     mp.remove_key_binding("context-menu-mouse-move")
 end
+
+mp.set_property_native(open_state_path, false)
 
 local function audio_tracks()
     local audios = {}
@@ -2102,6 +2106,7 @@ local function open_menu(page_key)
     mp.commandv("script-message", "chapter-menu-close")
 
     menu_open = true
+    mp.set_property_native(open_state_path, true)
     if not was_open then
         mp.commandv("script-message", "menu-guard-acquire", "context-menu")
     end
@@ -2175,6 +2180,12 @@ local function open_menu(page_key)
         end
     end)
 
+    mp.add_forced_key_binding("MBTN_RIGHT", "context-menu-mouse-right", function()
+        update_anchor_from_mouse()
+        clear_page_hover(current_page_key())
+        render_menu()
+    end)
+
     mp.add_forced_key_binding("mouse_move", "context-menu-mouse-move", function()
         local x, y = mp.get_mouse_pos()
         if not x or not y then
@@ -2233,6 +2244,17 @@ local function open_menu(page_key)
     render_menu()
 end
 
+local function open_menu_here()
+    if menu_open then
+        update_anchor_from_mouse()
+        clear_page_hover(current_page_key())
+        render_menu()
+        return
+    end
+
+    open_menu(PAGE_ROOT)
+end
+
 local function toggle_menu()
     if menu_open then
         close_menu()
@@ -2270,6 +2292,8 @@ end
 mp.register_script_message("context-menu-open", function()
     open_menu(PAGE_ROOT)
 end)
+
+mp.register_script_message("context-menu-open-here", open_menu_here)
 
 mp.register_script_message("context-menu-open-page", function(page_key)
     local target = compact_text(page_key or "")

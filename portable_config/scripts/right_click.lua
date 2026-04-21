@@ -1,7 +1,8 @@
 local mp = require "mp"
 local timer = nil
-local delay = 0.30
+local delay = 0.18
 local suppress_single_until = 0
+local context_menu_open_path = "user-data/context_menu/open"
 
 local function clear_timer()
     if timer then
@@ -14,13 +15,20 @@ local function open_menu()
     mp.commandv("script-message", "subtitle-menu-close")
     mp.commandv("script-message", "audio-menu-close")
     mp.commandv("script-message", "chapter-menu-close")
-    mp.commandv("script-message", "context-menu-toggle")
+    mp.commandv("script-message", "context-menu-open-here")
 end
 
 local function right_click_single()
     if mp.get_time() < suppress_single_until then
         return
     end
+
+    if mp.get_property_bool(context_menu_open_path, false) then
+        clear_timer()
+        open_menu()
+        return
+    end
+
     if timer then
         return
     end
