@@ -120,6 +120,9 @@ end
 
 local function close_menu()
     clear_close_timer()
+    if menu_open then
+        mp.commandv("script-message", "menu-guard-release", "subtitle-menu")
+    end
     menu_open = false
     close_picker()
     ui:clear()
@@ -738,7 +741,10 @@ local function open_menu()
     end
 
     mp.commandv("script-message", "audio-menu-close")
+    mp.commandv("script-message", "chapter-menu-close")
+    mp.commandv("script-message", "context-menu-close")
     menu_open = true
+    mp.commandv("script-message", "menu-guard-acquire", "subtitle-menu")
     close_picker()
     selected_row = 1
     bind_navigation_keys()

@@ -40,6 +40,18 @@ local function escape_ass(text)
     return text
 end
 
+local function run_action(action)
+    if type(action) ~= "function" then
+        return
+    end
+
+    local ok, err = xpcall(action, debug.traceback)
+    if not ok then
+        mp.msg.error("menu action failed: " .. tostring(err))
+        mp.osd_message("Menu action failed", 1.5)
+    end
+end
+
 local function append_rect(ass, x, y, width, height, fill_color, fill_alpha, border_color, border_alpha, border_size)
     ass:new_event()
     ass:append(string.format(
@@ -109,6 +121,7 @@ function M.new(overlay, options)
         panel_color = normalize_color(options.panel_color, "#121212"),
         surface_color = normalize_color(options.surface_color, "#1E1E1E"),
         selection_color = normalize_color(options.selection_color, "#362217"),
+        hover_color = normalize_color(options.hover_color, "#262626"),
     }
 
     return setmetatable({
@@ -207,16 +220,25 @@ function M:fit_text(text, max_width, size, bold)
     return text:sub(1, low) .. ellipsis
 end
 
-function M:panel_inner_width()
-    if self._inner_width then
-        return self._inner_width
+function M:panel_inner_width(panel_chars_override)
+    local panel_chars = tonumber(panel_chars_override) or self.theme.panel_chars
+    if not panel_chars or panel_chars < 28 then
+        panel_chars = self.theme.panel_chars
+    else
+        panel_chars = math.floor(panel_chars)
     end
 
-    local probe = string.rep("0", self.theme.panel_chars)
+    self._inner_width_cache = self._inner_width_cache or {}
+    if self._inner_width_cache[panel_chars] then
+        return self._inner_width_cache[panel_chars]
+    end
+
+    local probe = string.rep("0", panel_chars)
     local measured = self:measure_text(probe, self.theme.body_size, false)
-    local fallback = self.theme.panel_chars * math.max(7, self.theme.body_size * 0.62)
-    self._inner_width = math.floor(math.max(320, measured > 0 and measured or fallback))
-    return self._inner_width
+    local fallback = panel_chars * math.max(7, self.theme.body_size * 0.62)
+    local inner_width = math.floor(math.max(320, measured > 0 and measured or fallback))
+    self._inner_width_cache[panel_chars] = inner_width
+    return inner_width
 end
 
 function M:block_height(row)
@@ -255,10 +277,9 @@ function M:draw_badge(ass, x, y, text, fill_color, text_color, size)
     return badge_width
 end
 
-function M:render(spec)
-    local osd_width, osd_height = self:get_osd_size()
+function M:measure_panel(spec)
     local theme = self.theme
-    local inner_width = self:panel_inner_width()
+    local inner_width = self:panel_inner_width(spec.panel_chars)
     local panel_width = inner_width + (theme.padding_x * 2)
     local panel_height = theme.padding_y + theme.header_height
 
@@ -270,10 +291,22 @@ function M:render(spec)
     if #footer > 0 then
         panel_height = panel_height + 10 + (#footer * theme.note_height)
     end
-    panel_height = panel_height + theme.padding_y
 
-    local x = clamp(theme.x, 12, math.max(12, osd_width - panel_width - 12))
-    local y = clamp(theme.y, 12, math.max(12, osd_height - panel_height - 12))
+    panel_height = panel_height + theme.padding_y
+    return panel_width, panel_height
+end
+
+function M:render(spec)
+    local osd_width, osd_height = self:get_osd_size()
+    local theme = self.theme
+    local inner_width = self:panel_inner_width(spec.panel_chars)
+    local panel_width, panel_height = self:measure_panel(spec)
+    local footer = spec.footer or {}
+
+    local panel_x = tonumber(spec.left)
+    local panel_y = tonumber(spec.top)
+    local x = clamp(panel_x or theme.x, 12, math.max(12, osd_width - panel_width - 12))
+    local y = clamp(panel_y or theme.y, 12, math.max(12, osd_height - panel_height - 12))
     local row_x = x + theme.padding_x
     local row_width = inner_width
     local cursor_y = y + theme.padding_y + theme.header_height
@@ -347,12 +380,32 @@ function M:render(spec)
             )
         else
             local selected = row.selected == true
+            local hovered = row.hovered == true
             local muted = row.muted == true
             local badge_text = compact_text(row.badge or "")
             local badge_width = 0
             local badge_gap = 0
             local item_y = cursor_y
             local item_height = block_height - 2
+            local fill_color = theme.surface_color
+            local fill_alpha = "7C"
+            local border_color = theme.surface_color
+            local border_alpha = "A4"
+            local border_size = 1.0
+
+            if selected then
+                fill_color = theme.selection_color
+                fill_alpha = "48"
+                border_color = theme.accent_color
+                border_alpha = "74"
+                border_size = 1.4
+            elseif hovered then
+                fill_color = theme.hover_color
+                fill_alpha = "5C"
+                border_color = theme.accent_color
+                border_alpha = "98"
+                border_size = 1.1
+            end
 
             append_rect(
                 ass,
@@ -360,15 +413,17 @@ function M:render(spec)
                 item_y,
                 row_width,
                 item_height,
-                selected and theme.selection_color or theme.surface_color,
-                selected and "48" or "7C",
-                selected and theme.accent_color or theme.surface_color,
-                selected and "74" or "A4",
-                selected and 1.4 or 1.0
+                fill_color,
+                fill_alpha,
+                border_color,
+                border_alpha,
+                border_size
             )
 
             if selected then
                 append_rect(ass, row_x, item_y, 4, item_height, theme.accent_color, "00", theme.accent_color, "00", 0)
+            elseif hovered then
+                append_rect(ass, row_x, item_y, 2, item_height, theme.accent_color, "40", theme.accent_color, "40", 0)
             end
 
             local badge_x = row_x + row_width - 14
@@ -395,7 +450,8 @@ function M:render(spec)
             local raw_value = compact_text(row.value or "")
             local value_size = row.value_size or theme.body_size
             local value_bold = row.value_bold == true
-            local value_share = clamp(tonumber(row.value_share) or 0.46, 0.25, 0.8)
+            local min_value_share = clamp(tonumber(row.min_value_share) or 0.25, 0.05, 0.8)
+            local value_share = clamp(tonumber(row.value_share) or 0.46, min_value_share, 0.8)
             local value_text = raw_value ~= "" and self:fit_text(raw_value, math.max(0, math.floor(value_width * value_share)), value_size, value_bold) or ""
             local value_measured = value_text ~= "" and self:measure_text(value_text, value_size, value_bold) or 0
             local label_limit = math.max(0, value_width - value_measured - (value_text ~= "" and 20 or 0))
@@ -439,6 +495,7 @@ function M:render(spec)
                     y1 = item_y,
                     x2 = row_x + row_width,
                     y2 = item_y + item_height,
+                    row_index = row.choice_index,
                     action = row.action,
                 }
             end
@@ -471,6 +528,28 @@ function M:render(spec)
     self.overlay:update()
 end
 
+function M:hit_test(x, y)
+    if not self.panel_bounds then
+        return { kind = "outside" }
+    end
+
+    if x < self.panel_bounds.x1 or x > self.panel_bounds.x2 or y < self.panel_bounds.y1 or y > self.panel_bounds.y2 then
+        return { kind = "outside" }
+    end
+
+    for _, hitbox in ipairs(self.hitboxes) do
+        if x >= hitbox.x1 and x <= hitbox.x2 and y >= hitbox.y1 and y <= hitbox.y2 then
+            return {
+                kind = "item",
+                row_index = hitbox.row_index,
+                action = hitbox.action,
+            }
+        end
+    end
+
+    return { kind = "inside" }
+end
+
 function M:clear()
     self.hitboxes = {}
     self.panel_bounds = nil
@@ -478,21 +557,16 @@ function M:clear()
 end
 
 function M:handle_click(x, y)
-    if not self.panel_bounds then
+    local hit = self:hit_test(x, y)
+    if hit.kind == "outside" then
         return "outside"
     end
 
-    if x < self.panel_bounds.x1 or x > self.panel_bounds.x2 or y < self.panel_bounds.y1 or y > self.panel_bounds.y2 then
-        return "outside"
-    end
-
-    for _, hitbox in ipairs(self.hitboxes) do
-        if x >= hitbox.x1 and x <= hitbox.x2 and y >= hitbox.y1 and y <= hitbox.y2 then
-            if hitbox.action then
-                hitbox.action()
-            end
-            return "handled"
+    if hit.kind == "item" then
+        if hit.action then
+            run_action(hit.action)
         end
+        return "handled"
     end
 
     return "inside"

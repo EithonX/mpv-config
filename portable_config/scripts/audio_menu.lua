@@ -181,6 +181,9 @@ end
 
 local function close_menu()
     clear_close_timer()
+    if menu_open then
+        mp.commandv("script-message", "menu-guard-release", "audio-menu")
+    end
     menu_open = false
     ui:clear()
     mp.remove_key_binding("audio-menu-up")
@@ -339,7 +342,10 @@ local function open_menu()
     end
 
     mp.commandv("script-message", "subtitle-menu-close")
+    mp.commandv("script-message", "chapter-menu-close")
+    mp.commandv("script-message", "context-menu-close")
     menu_open = true
+    mp.commandv("script-message", "menu-guard-acquire", "audio-menu")
     sync_selected_index(audio_tracks())
     bind_navigation_keys()
     render_menu()

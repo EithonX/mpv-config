@@ -13,7 +13,8 @@ end
 local function open_menu()
     mp.commandv("script-message", "subtitle-menu-close")
     mp.commandv("script-message", "audio-menu-close")
-    mp.commandv("script-binding", "select/menu")
+    mp.commandv("script-message", "chapter-menu-close")
+    mp.commandv("script-message", "context-menu-toggle")
 end
 
 local function right_click_single()
@@ -32,6 +33,10 @@ end
 local function right_click_double()
     clear_timer()
     suppress_single_until = mp.get_time() + 0.35
+    mp.commandv("script-message", "context-menu-close")
+    mp.commandv("script-message", "chapter-menu-close")
+    mp.commandv("script-message", "subtitle-menu-close")
+    mp.commandv("script-message", "audio-menu-close")
     mp.commandv("cycle", "fullscreen")
     local is_fullscreen = mp.get_property_bool("fullscreen")
     mp.osd_message(is_fullscreen and "Fullscreen On" or "Fullscreen Off", 0.5)
