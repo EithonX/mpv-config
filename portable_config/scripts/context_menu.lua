@@ -150,6 +150,43 @@ local function current_media_title()
     return basename(current_path())
 end
 
+local function set_clipboard_text(text)
+    local value = tostring(text or "")
+    if value == "" then
+        return false
+    end
+
+    mp.set_property("clipboard/text", value)
+    return true
+end
+
+local function clipboard_text()
+    mp.commandv("update-clipboard", "text")
+
+    local value = compact_text(mp.get_property("clipboard/text", ""))
+    if value == "" then
+        return ""
+    end
+
+    local quoted = value:match('^"(.*)"$')
+    if quoted and quoted ~= "" then
+        value = quoted
+    end
+
+    return value
+end
+
+local function load_from_clipboard()
+    local value = clipboard_text()
+    if value == "" then
+        mp.osd_message("Clipboard is empty", 1.2)
+        return
+    end
+
+    mp.commandv("loadfile", value)
+    mp.osd_message("Opened clipboard path/URL", 1.2)
+end
+
 local function clear_close_timer()
     if close_timer then
         close_timer:kill()
@@ -2006,7 +2043,7 @@ local function build_tools_page()
             label = "Open Clipboard",
             value = "Load URL or path",
             action = close_after(function()
-                mp.command("update-clipboard text; loadfile ${clipboard/text}; show-text '+ ${clipboard/text}'")
+                load_from_clipboard()
             end),
         },
         {
@@ -2014,8 +2051,9 @@ local function build_tools_page()
             value = is_url(path) and "Network source" or "Current file",
             muted = path == "",
             action = path ~= "" and function()
-                mp.commandv("set", "clipboard/text", path)
-                mp.osd_message((is_url(path) and "URL" or "Path") .. " copied", 1.0)
+                if set_clipboard_text(path) then
+                    mp.osd_message((is_url(path) and "URL" or "Path") .. " copied", 1.0)
+                end
             end or nil,
         },
         {
@@ -2023,8 +2061,9 @@ local function build_tools_page()
             value = current_media_title(),
             muted = current_media_title() == "",
             action = current_media_title() ~= "" and function()
-                mp.commandv("set", "clipboard/text", current_media_title())
-                mp.osd_message("Title copied", 1.0)
+                if set_clipboard_text(current_media_title()) then
+                    mp.osd_message("Title copied", 1.0)
+                end
             end or nil,
         },
         {
@@ -2032,8 +2071,9 @@ local function build_tools_page()
             value = has_subtitle_text and "Current on-screen line" or "Unavailable",
             muted = not has_subtitle_track or not has_subtitle_text,
             action = has_subtitle_track and has_subtitle_text and function()
-                mp.commandv("set", "clipboard/text", subtitle_text)
-                mp.osd_message("Subtitle copied", 1.0)
+                if set_clipboard_text(subtitle_text) then
+                    mp.osd_message("Subtitle copied", 1.0)
+                end
             end or nil,
         },
         {
