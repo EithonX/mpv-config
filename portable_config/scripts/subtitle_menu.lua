@@ -9,7 +9,7 @@ local options = {
     top = 44,
     panel_chars = 44,
     picker_rows = 8,
-    timeout = 7,
+    timeout = 10,
     accent_color = "#FF8232",
     text_color = "#FFFFFF",
     muted_color = "#A8A8A8",
@@ -17,6 +17,9 @@ local options = {
     panel_color = "#121212",
     surface_color = "#1E1E1E",
     selection_color = "#362217",
+    hover_color = "#262626",
+    marquee_delay = 0.8,
+    marquee_step = 0.2,
 }
 
 require "mp.options".read_options(options, "subtitle_menu")
@@ -33,6 +36,19 @@ local hovered_picker_index = nil
 local close_timer = nil
 local hover_open_timer = nil
 local render_menu
+
+local marquee_timer = nil
+local marquee_focus_key = nil
+local marquee_started_at = 0
+
+local function stop_marquee()
+    if marquee_timer then
+        marquee_timer:kill()
+        marquee_timer = nil
+    end
+    marquee_focus_key = nil
+    marquee_started_at = 0
+end
 
 local function compact_text(text)
     return tostring(text or ""):gsub("%s+", " "):gsub("^%s*(.-)%s*$", "%1")
@@ -132,6 +148,7 @@ end
 
 local function close_menu()
     clear_close_timer()
+    stop_marquee()
     clear_hover_open_timer()
     if menu_open then
         mp.commandv("script-message", "menu-guard-release", "subtitle-menu")
@@ -160,6 +177,22 @@ local function reset_close_timer()
         return
     end
     close_timer = mp.add_timeout(options.timeout, close_menu)
+end
+
+local function ensure_marquee()
+    if marquee_timer then
+        return
+    end
+    marquee_timer = mp.add_periodic_timer(
+        math.max(0.16, tonumber(options.marquee_step) or 0.2),
+        function()
+            if not menu_open then
+                stop_marquee()
+                return
+            end
+            render_menu()
+        end
+    )
 end
 
 local function first_alternate_track(tracks, excluded_id, preferred_id)
@@ -664,6 +697,13 @@ render_menu = function()
         local first_index, last_index = picker_window(#choices)
         local active_id = current_choice_id(picker_kind, tracks)
 
+        local sel_choice = choices[picker_index]
+        local sel_key = sel_choice and (picker_kind .. ":" .. tostring(sel_choice.id or picker_index)) or ""
+        if marquee_focus_key ~= sel_key then
+            marquee_focus_key = sel_key
+            marquee_started_at = mp.get_time()
+        end
+
         if picker_kind == "secondary" and primary then
             picker_rows[#picker_rows + 1] = {
                 kind = "section",
@@ -700,6 +740,11 @@ render_menu = function()
                     picker_index = index
                     apply_picker_selection(true)
                 end,
+                marquee_state = (index == picker_index) and {
+                    started_at = marquee_started_at,
+                    delay = options.marquee_delay,
+                    step = options.marquee_step,
+                } or nil,
             }
         end
 
@@ -754,6 +799,12 @@ render_menu = function()
 
     ui:render_panels(specs)
     reset_close_timer()
+
+    if ui.needs_marquee then
+        ensure_marquee()
+    else
+        stop_marquee()
+    end
 end
 
 local function move_selection(step)

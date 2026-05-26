@@ -46,9 +46,9 @@ local function right_click_double()
     mp.commandv("script-message", "chapter-menu-close")
     mp.commandv("script-message", "subtitle-menu-close")
     mp.commandv("script-message", "audio-menu-close")
+    local was_fullscreen = mp.get_property_bool("fullscreen")
     mp.commandv("cycle", "fullscreen")
-    local is_fullscreen = mp.get_property_bool("fullscreen")
-    mp.osd_message(is_fullscreen and "Fullscreen On" or "Fullscreen Off", 0.5)
+    mp.osd_message(was_fullscreen and "Fullscreen Off" or "Fullscreen On", 0.5)
 end
 
 local function register_bindings()

@@ -220,6 +220,59 @@ function M:fit_text(text, max_width, size, bold)
     return text:sub(1, low) .. ellipsis
 end
 
+function M:marquee_text(text, max_width, size, bold, state)
+    text = compact_text(text)
+    if text == "" or max_width <= 0 then
+        return ""
+    end
+
+    if self:measure_text(text, size, bold) <= max_width then
+        return text
+    end
+
+    self.needs_marquee = true
+
+    if not state or not state.started_at then
+        return self:fit_text(text, max_width, size, bold)
+    end
+
+    local delay = math.max(0.2, tonumber(state.delay) or 0.8)
+    local step_time = math.max(0.16, tonumber(state.step) or 0.2)
+    local elapsed = math.max(0, mp.get_time() - state.started_at)
+    if elapsed < delay then
+        return self:fit_text(text, max_width, size, bold)
+    end
+
+    local gap = " | "
+    local cycle = text .. gap .. text
+    local cycle_span = #text + #gap
+    local offset = math.floor((elapsed - delay) / step_time) % math.max(1, cycle_span)
+    local cycle_length = #cycle
+    local window = ""
+    local index = offset + 1
+    local max_chars = math.max(#text + #gap, 12)
+
+    while #window < max_chars do
+        if index > cycle_length then
+            index = 1
+        end
+
+        local candidate = window .. cycle:sub(index, index)
+        if window ~= "" and self:measure_text(candidate, size, bold) > max_width then
+            break
+        end
+
+        window = candidate
+        index = index + 1
+    end
+
+    if window == "" then
+        window = self:fit_text(text, max_width, size, bold)
+    end
+
+    return window
+end
+
 function M:panel_inner_width(panel_chars_override)
     local panel_chars = tonumber(panel_chars_override) or self.theme.panel_chars
     if not panel_chars or panel_chars < 28 then
@@ -297,6 +350,7 @@ function M:measure_panel(spec)
 end
 
 function M:render_panels(specs)
+    self.needs_marquee = false
     local osd_width, osd_height = self:get_osd_size()
     local theme = self.theme
     local ass = assdraw.ass_new()
@@ -456,10 +510,16 @@ function M:render_panels(specs)
                 local value_text = raw_value ~= "" and self:fit_text(raw_value, math.max(0, math.floor(value_width * value_share)), value_size, value_bold) or ""
                 local value_measured = value_text ~= "" and self:measure_text(value_text, value_size, value_bold) or 0
                 local label_limit = math.max(0, value_width - value_measured - (value_text ~= "" and 20 or 0))
-                local label_text = self:fit_text(compact_text(row.label or ""), label_limit, theme.body_size, true)
+                local raw_label = compact_text(row.label or "")
+                local label_text
+                if row.marquee_state and row.marquee_state.started_at then
+                    label_text = self:marquee_text(raw_label, label_limit, theme.body_size, true, row.marquee_state)
+                else
+                    label_text = self:fit_text(raw_label, label_limit, theme.body_size, true)
+                end
 
                 if label_text == "" then
-                    label_text = self:fit_text(compact_text(row.label or ""), value_width, theme.body_size, true)
+                    label_text = self:fit_text(raw_label, value_width, theme.body_size, true)
                     value_text = ""
                     value_measured = 0
                 end

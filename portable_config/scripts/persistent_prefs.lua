@@ -2,11 +2,13 @@ local mp = require "mp"
 local utils = require "mp.utils"
 
 local state_path = mp.command_native({ "expand-path", "~~/script-opts/persistent_prefs.json" })
+local speed_state_path = mp.command_native({ "expand-path", "~~/script-opts/speed_toggle_state.txt" })
 local default_subtitle_mode = "primary"
 local shared_state_path = "user-data/subtitle_auto/state"
 
 local state = {
     volume = nil,
+    saved_speed = nil,
 }
 
 local signs_phrases = {
@@ -240,6 +242,10 @@ local function read_state()
     if type(parsed.volume) == "number" and parsed.volume >= 0 then
         state.volume = round(parsed.volume, 0)
     end
+
+    if type(parsed.saved_speed) == "number" and parsed.saved_speed > 0 then
+        state.saved_speed = round(parsed.saved_speed, 2)
+    end
 end
 
 local function write_state()
@@ -335,7 +341,7 @@ local function analyze_audio(track)
         summary = summary,
         preference = preference,
         english = english,
-        japanese = japanese,
+        japanese = lang == "ja" or lang == "jpn",
         commentary = commentary,
     }
 end
@@ -887,6 +893,36 @@ local function safe_smart_select(kind)
     end
 end
 
+local function remember_speed(_, value)
+    if type(value) ~= "number" then
+        return
+    end
+
+    local rounded = round(value, 2)
+    if math.abs(rounded - 1.0) >= 0.01 then
+        state.saved_speed = rounded
+        write_state()
+    end
+end
+
+local function toggle_speed()
+    local current_speed = mp.get_property_number("speed")
+
+    if math.abs(current_speed - 1.0) < 0.01 then
+        if state.saved_speed and math.abs(state.saved_speed - 1.0) > 0.01 then
+            mp.set_property("speed", state.saved_speed)
+            mp.osd_message("Speed: " .. state.saved_speed .. "x")
+        else
+            mp.osd_message("Speed: 1.0x (No previous speed saved)")
+        end
+    else
+        state.saved_speed = round(current_speed, 2)
+        write_state()
+        mp.set_property("speed", 1.0)
+        mp.osd_message("Speed: 1.0x (Saved " .. state.saved_speed .. "x)")
+    end
+end
+
 local function remember_volume(_, value)
     if type(value) ~= "number" then
         return
@@ -898,7 +934,22 @@ end
 
 read_state()
 
+-- Migrate speed state from the old speed_toggle_state.txt (one-time)
+if state.saved_speed == nil then
+    local old_file = io.open(speed_state_path, "r")
+    if old_file then
+        local value = old_file:read("*a")
+        old_file:close()
+        local parsed_speed = tonumber(value)
+        if parsed_speed and parsed_speed > 0 then
+            state.saved_speed = round(parsed_speed, 2)
+            write_state()
+        end
+    end
+end
+
 mp.observe_property("volume", "number", remember_volume)
+mp.observe_property("speed", "number", remember_speed)
 mp.observe_property("aid", "native", refresh_shared_state)
 mp.observe_property("sid", "native", refresh_shared_state)
 mp.observe_property("secondary-sid", "native", refresh_shared_state)
@@ -927,5 +978,6 @@ mp.add_key_binding(nil, "subtitle-mode-cycle", safe_cycle_subtitle_mode)
 mp.register_script_message("cycle-subtitle-mode", safe_cycle_subtitle_mode)
 mp.register_script_message("set-subtitle-mode", safe_set_subtitle_mode)
 mp.register_script_message("smart-select-subtitles", safe_smart_select)
+mp.register_script_message("toggle-speed", toggle_speed)
 
 refresh_shared_state()
