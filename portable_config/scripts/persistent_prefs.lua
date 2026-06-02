@@ -11,6 +11,9 @@ local state = {
     saved_speed = nil,
 }
 
+local session_prefs = {}
+local last_auto_sid = nil
+
 local signs_phrases = {
     "sign",
     "signs",
@@ -417,6 +420,29 @@ local function best_track(tracks, scorer, excluded_id)
     return best, best_score
 end
 
+local function session_score_boost(track)
+    local context = build_selection_context()
+    local audio_pref = context.audio.preference or "unknown"
+    local pref = session_prefs[audio_pref]
+    
+    if not pref or (not pref.lang and not pref.features) then return 0 end
+    local score = 0
+    local features = analyze_subtitle_track(track)
+    
+    if pref.lang and pref.lang ~= "" and track_lang(track) == pref.lang then
+        score = score + 500
+    end
+    
+    if pref.features then
+        if pref.features.dialogue and features.dialogue then score = score + 200 end
+        if pref.features.signs and features.signs then score = score + 200 end
+        if pref.features.hearing_impaired and features.hearing_impaired then score = score + 200 end
+        if pref.features.dubtitle and features.dubtitle then score = score + 200 end
+        if pref.features.english and features.english then score = score + 100 end
+    end
+    return score
+end
+
 local function score_regular_primary(track, current_sid)
     local features = analyze_subtitle_track(track)
     local score = 0
@@ -453,6 +479,8 @@ local function score_regular_primary(track, current_sid)
     if features.commentary then
         score = score - 220
     end
+
+    score = score + session_score_boost(track)
 
     return score
 end
@@ -497,6 +525,8 @@ local function score_dubbed_primary(track, current_sid)
         score = score - 220
     end
 
+    score = score + session_score_boost(track)
+
     return score
 end
 
@@ -533,6 +563,8 @@ local function score_signs_primary(track, current_sid)
     if features.commentary then
         score = score - 220
     end
+
+    score = score + session_score_boost(track)
 
     return score
 end
@@ -582,6 +614,8 @@ local function score_dialogue_secondary(track, current_secondary_sid, audio_pref
     if features.commentary then
         score = score - 220
     end
+
+    score = score + session_score_boost(track)
 
     return score
 end
@@ -755,6 +789,7 @@ local function apply_subtitle_mode(mode, silent)
     local detail = nil
 
     if mode == "off" then
+        last_auto_sid = nil
         mp.set_property_bool("sub-visibility", false)
         mp.set_property("secondary-sid", "no")
         mp.set_property_bool("secondary-sub-visibility", false)
@@ -762,9 +797,11 @@ local function apply_subtitle_mode(mode, silent)
     elseif mode == "primary" then
         primary_track = choose_primary_track(context)
         if primary_track then
+            last_auto_sid = tonumber(primary_track.id)
             mp.set_property_number("sid", tonumber(primary_track.id))
             mp.set_property_bool("sub-visibility", true)
         elseif mp.get_property("sid") == "no" then
+            last_auto_sid = nil
             mp.set_property("sid", "auto")
             mp.set_property_bool("sub-visibility", true)
         end
@@ -791,9 +828,11 @@ local function apply_subtitle_mode(mode, silent)
         end
 
         if primary_track then
+            last_auto_sid = tonumber(primary_track.id)
             mp.set_property_number("sid", tonumber(primary_track.id))
             mp.set_property_bool("sub-visibility", true)
         elseif mp.get_property("sid") == "no" then
+            last_auto_sid = nil
             mp.set_property("sid", "auto")
             mp.set_property_bool("sub-visibility", true)
         end
@@ -949,9 +988,31 @@ if state.saved_speed == nil then
 end
 
 mp.observe_property("volume", "number", remember_volume)
+local function handle_sid_change(name, value)
+    refresh_shared_state()
+    local num_val = tonumber(value)
+    if not num_val then return end
+    
+    if last_auto_sid == num_val then
+        return
+    end
+    
+    last_auto_sid = nil
+    local context = build_selection_context()
+    local audio_pref = context.audio.preference or "unknown"
+    local primary_track = find_track_by_id(num_val, context.tracks)
+    if primary_track then
+        session_prefs[audio_pref] = {
+            lang = track_lang(primary_track),
+            features = analyze_subtitle_track(primary_track)
+        }
+        mp.msg.info("[persistent_prefs] Saved session preference for audio=" .. tostring(audio_pref) .. ": lang=" .. tostring(session_prefs[audio_pref].lang))
+    end
+end
+
 mp.observe_property("speed", "number", remember_speed)
 mp.observe_property("aid", "native", refresh_shared_state)
-mp.observe_property("sid", "native", refresh_shared_state)
+mp.observe_property("sid", "native", handle_sid_change)
 mp.observe_property("secondary-sid", "native", refresh_shared_state)
 mp.observe_property("sub-visibility", "bool", refresh_shared_state)
 mp.observe_property("secondary-sub-visibility", "bool", refresh_shared_state)
