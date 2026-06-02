@@ -63,35 +63,69 @@ local function extract_filename(headers)
     return filename
 end
 
+local is_windows = package.config:sub(1,1) == "\\"
+
 local function resolve_title(url)
     if resolving then return end
     resolving = true
 
-    -- We use curl to fetch just 1 byte to get the headers
-    local args = {
-        "curl.exe",
-        "-s",        -- silent
-        "-D", "-",   -- dump headers to stdout
-        "-o", "NUL", -- discard output
-        "-r", "0-0", -- only 1 byte
-        "-L",        -- follow redirects
-        url
-    }
+    local function parse_and_set(output)
+        local filename = extract_filename(output)
+        if filename then
+            set_title(filename)
+        end
+    end
 
+    local function try_wget()
+        mp.command_native_async({
+            name = "subprocess",
+            args = {"wget", "--spider", "--server-response", "-q", url},
+            capture_stdout = false,
+            capture_stderr = true
+        }, function(success, result, error)
+            resolving = false
+            if success and result and result.stderr then
+                -- wget outputs headers to stderr
+                parse_and_set(result.stderr)
+            end
+        end)
+    end
+    
+    local function try_powershell()
+        -- Use .RawContent from Invoke-WebRequest to get the raw HTTP headers
+        local ps_cmd = string.format([[$r = Invoke-WebRequest -Uri '%s' -Method Get -Headers @{Range='bytes=0-0'} -UseBasicParsing -ErrorAction SilentlyContinue; if ($r) { Write-Output $r.RawContent }]], url:gsub("'", "''"))
+        mp.command_native_async({
+            name = "subprocess",
+            args = {"powershell", "-NoProfile", "-Command", ps_cmd},
+            capture_stdout = true,
+            capture_stderr = false
+        }, function(success, result, error)
+            resolving = false
+            if success and result and result.stdout then
+                parse_and_set(result.stdout)
+            end
+        end)
+    end
+
+    local curl_cmd = is_windows and "curl.exe" or "curl"
+    local null_out = is_windows and "NUL" or "/dev/null"
+    
     mp.command_native_async({
         name = "subprocess",
-        args = args,
+        args = {curl_cmd, "-s", "-D", "-", "-o", null_out, "-r", "0-0", "-L", url},
         capture_stdout = true,
         capture_stderr = false
     }, function(success, result, error)
-        resolving = false
-        if not success or not result.stdout then
-            return
-        end
-
-        local filename = extract_filename(result.stdout)
-        if filename then
-            set_title(filename)
+        if success and result and result.status == 0 and result.stdout and result.stdout ~= "" then
+            resolving = false
+            parse_and_set(result.stdout)
+        else
+            -- fallback if curl fails or is missing
+            if is_windows then
+                try_powershell()
+            else
+                try_wget()
+            end
         end
     end)
 end
