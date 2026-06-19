@@ -1062,7 +1062,6 @@ local function maybe_open_hovered_submenu()
             return
         end
 
-        current_state.selected = hovered
         if invoke_action(choice.action) then
             arm_submenu_hover()
         else
@@ -2366,8 +2365,10 @@ local function activate_current_choice()
     end
 
     local state = ensure_page_state(current_page_key())
-    local choice = page.choices and page.choices[state.selected] or nil
+    local active_index = state.hovered or state.selected
+    local choice = page.choices and page.choices[active_index] or nil
     if choice and choice.action then
+        state.selected = active_index
         choice.action()
     end
 end
@@ -2554,7 +2555,6 @@ local function open_menu(page_key, standalone)
         if hovered then
             local page = build_page(page_key)
             local choice = page.choices and page.choices[hovered] or nil
-            state.selected = hovered
             if choice and choice.submenu_page then
                 local existing_next = page_key_at(panel_index + 1)
                 if panel_index + 1 < #page_stack or existing_next ~= choice.submenu_page then

@@ -349,7 +349,7 @@ render_menu = function()
         end
 
         footer = {
-            "Hover, Arrows, or Wheel moves",
+            "Hover highlights | Arrows or Wheel moves",
             "Click applies | Right click or Esc closes",
         }
     end
