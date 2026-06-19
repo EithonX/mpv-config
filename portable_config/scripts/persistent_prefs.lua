@@ -376,7 +376,7 @@ local function analyze_subtitle_track(track)
     end
 
     local forced = (track and track.forced == true) or has_any_phrase(label_text, forced_phrases)
-    local hearing_impaired = (track and track["hearing-impaired"] == true) or has_any_phrase(label_text, sdh_phrases) or has_token(label_text, "cc")
+    local hearing_impaired = (track and track["hearing-impaired"] == true) or has_any_phrase(meta_text, sdh_phrases) or has_token(meta_text, "cc")
     local commentary = has_any_phrase(label_text, commentary_phrases)
     local dubtitle = has_any_phrase(label_text, dubtitle_phrases)
         or has_phrase(label_text, "english dub")
@@ -418,6 +418,13 @@ local function best_track(tracks, scorer, excluded_id)
     end
 
     return best, best_score
+end
+
+local function build_selection_context(tracks)
+    return {
+        tracks = tracks or subtitle_tracks(),
+        audio = analyze_audio(current_audio_track()),
+    }
 end
 
 local function session_score_boost(track)
@@ -618,13 +625,6 @@ local function score_dialogue_secondary(track, current_secondary_sid, audio_pref
     score = score + session_score_boost(track)
 
     return score
-end
-
-local function build_selection_context(tracks)
-    return {
-        tracks = tracks or subtitle_tracks(),
-        audio = analyze_audio(current_audio_track()),
-    }
 end
 
 local function choose_regular_primary(context)
