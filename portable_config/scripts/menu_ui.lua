@@ -129,6 +129,7 @@ function M.new(overlay, options)
         measure = measure,
         theme = theme,
         width_cache = {},
+        width_cache_count = 0,
         hitboxes = {},
         panel_bounds = nil,
     }, M)
@@ -183,8 +184,38 @@ function M:measure_text(text, size, bold)
         width = #text * size * 0.58
     end
 
+    -- Dynamic strings (marquee windows, clocks, changing titles) produce a
+    -- unique key each redraw; drop the cache once it gets large so it can't
+    -- grow without bound across a long session.
+    if self.width_cache_count >= 4096 then
+        self.width_cache = {}
+        self.width_cache_count = 0
+    end
     self.width_cache[cache_key] = width
+    self.width_cache_count = self.width_cache_count + 1
     return width
+end
+
+-- Move a byte index back to the start of a UTF-8 character so a slice
+-- never cuts through a multi-byte codepoint (which renders as mojibake,
+-- common with non-ASCII subtitle/audio track titles).
+local function utf8_floor(text, index)
+    while index > 0 do
+        local b = text:byte(index + 1)
+        if not b or b < 0x80 or b >= 0xC0 then
+            break
+        end
+        index = index - 1
+    end
+    return index
+end
+
+local function utf8_codepoints(text)
+    local chars = {}
+    for char in tostring(text or ""):gmatch("[%z\1-\127\194-\244][\128-\191]*") do
+        chars[#chars + 1] = char
+    end
+    return chars
 end
 
 function M:fit_text(text, max_width, size, bold)
@@ -214,6 +245,7 @@ function M:fit_text(text, max_width, size, bold)
         end
     end
 
+    low = utf8_floor(text, low)
     if low <= 0 then
         return ellipsis
     end
@@ -245,24 +277,27 @@ function M:marquee_text(text, max_width, size, bold, state)
 
     local gap = " | "
     local cycle = text .. gap .. text
-    local cycle_span = #text + #gap
+    local cycle_chars = utf8_codepoints(cycle)
+    local cycle_span = #utf8_codepoints(text .. gap)
     local offset = math.floor((elapsed - delay) / step_time) % math.max(1, cycle_span)
-    local cycle_length = #cycle
+    local cycle_length = #cycle_chars
     local window = ""
+    local window_chars = 0
     local index = offset + 1
-    local max_chars = math.max(#text + #gap, 12)
+    local max_chars = math.max(cycle_span, 12)
 
-    while #window < max_chars do
+    while window_chars < max_chars do
         if index > cycle_length then
             index = 1
         end
 
-        local candidate = window .. cycle:sub(index, index)
+        local candidate = window .. cycle_chars[index]
         if window ~= "" and self:measure_text(candidate, size, bold) > max_width then
             break
         end
 
         window = candidate
+        window_chars = window_chars + 1
         index = index + 1
     end
 

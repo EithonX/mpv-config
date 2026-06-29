@@ -252,12 +252,19 @@ local function read_state()
 end
 
 local function write_state()
+    -- Encode before touching the file so a failed/empty encode never
+    -- truncates the existing state to an empty (corrupt) file.
+    local ok, encoded = pcall(utils.format_json, state)
+    if not ok or type(encoded) ~= "string" then
+        return
+    end
+
     local file = io.open(state_path, "w")
     if not file then
         return
     end
 
-    file:write(utils.format_json(state))
+    file:write(encoded)
     file:close()
 end
 
@@ -945,7 +952,7 @@ local function remember_speed(_, value)
 end
 
 local function toggle_speed()
-    local current_speed = mp.get_property_number("speed")
+    local current_speed = mp.get_property_number("speed", 1.0)
 
     if math.abs(current_speed - 1.0) < 0.01 then
         if state.saved_speed and math.abs(state.saved_speed - 1.0) > 0.01 then
@@ -962,13 +969,30 @@ local function toggle_speed()
     end
 end
 
+-- Volume can fire many times per second while scrubbing; debounce the
+-- synchronous disk write so we don't hammer the state file every tick.
+local volume_save_timer = nil
+local function flush_volume_state()
+    if volume_save_timer then
+        volume_save_timer:kill()
+        volume_save_timer = nil
+    end
+    write_state()
+end
+
 local function remember_volume(_, value)
     if type(value) ~= "number" then
         return
     end
 
     state.volume = round(value, 0)
-    write_state()
+    if volume_save_timer then
+        volume_save_timer:kill()
+    end
+    volume_save_timer = mp.add_timeout(1.0, function()
+        write_state()
+        volume_save_timer = nil
+    end)
 end
 
 read_state()
@@ -1034,7 +1058,7 @@ mp.register_event("file-loaded", function()
     end)
 end)
 
-mp.register_event("shutdown", write_state)
+mp.register_event("shutdown", flush_volume_state)
 mp.add_key_binding(nil, "subtitle-mode-cycle", safe_cycle_subtitle_mode)
 mp.register_script_message("cycle-subtitle-mode", safe_cycle_subtitle_mode)
 mp.register_script_message("set-subtitle-mode", safe_set_subtitle_mode)

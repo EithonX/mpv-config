@@ -95,6 +95,14 @@ local function clamp(value, min_value, max_value)
     return value
 end
 
+local function utf8_codepoints(text)
+    local chars = {}
+    for char in tostring(text or ""):gmatch("[%z\1-\127\194-\244][\128-\191]*") do
+        chars[#chars + 1] = char
+    end
+    return chars
+end
+
 local function is_url(path)
     return type(path) == "string" and path:match("^[%a][%w+.-]*://") ~= nil
 end
@@ -972,24 +980,27 @@ local function marquee_playlist_label(text, max_width, focus_key)
 
     local gap = " | "
     local cycle = text .. gap .. text
-    local cycle_span = #text + #gap
+    local cycle_chars = utf8_codepoints(cycle)
+    local cycle_span = #utf8_codepoints(text .. gap)
     local offset = math.floor((elapsed - delay) / step_time) % math.max(1, cycle_span)
-    local cycle_length = #cycle
+    local cycle_length = #cycle_chars
     local window = ""
+    local window_chars = 0
     local index = offset + 1
-    local max_chars = math.max(#text + #gap, 12)
+    local max_chars = math.max(cycle_span, 12)
 
-    while #window < max_chars do
+    while window_chars < max_chars do
         if index > cycle_length then
             index = 1
         end
 
-        local candidate = window .. cycle:sub(index, index)
+        local candidate = window .. cycle_chars[index]
         if window ~= "" and ui:measure_text(candidate, body_size, true) > max_width then
             break
         end
 
         window = candidate
+        window_chars = window_chars + 1
         index = index + 1
     end
 
@@ -1028,47 +1039,6 @@ local function submenu_action(page_key)
         page_stack[#page_stack + 1] = page_key
         render_menu()
     end
-end
-
-local function maybe_open_hovered_submenu()
-    clear_submenu_hover()
-    if not submenu_hover_ready() then
-        return
-    end
-
-    local page_key = current_page_key()
-    local page = build_page(page_key)
-    local state = ensure_page_state(page_key)
-    local hovered = state.hovered
-    local choice = page.choices and hovered and page.choices[hovered] or nil
-    local submenu_page = choice and choice.submenu_page or nil
-
-    if not submenu_page or submenu_page == page_key then
-        return
-    end
-
-    local target = page_key .. ":" .. tostring(hovered) .. ":" .. submenu_page
-    submenu_hover_target = target
-    submenu_hover_timer = mp.add_timeout(math.max(0.04, tonumber(options.submenu_hover_delay) or 0.10), function()
-        submenu_hover_timer = nil
-        if not menu_open or current_page_key() ~= page_key then
-            submenu_hover_target = nil
-            return
-        end
-
-        local current_state = ensure_page_state(page_key)
-        if current_state.hovered ~= hovered then
-            submenu_hover_target = nil
-            return
-        end
-
-        if invoke_action(choice.action) then
-            arm_submenu_hover()
-        else
-            close_menu()
-        end
-        submenu_hover_target = nil
-    end)
 end
 
 local function close_after(action)
@@ -1324,6 +1294,7 @@ local function build_playlist_page()
                 label = choice.label,
                 value = choice.value,
                 value_share = choice.value_share,
+                min_value_share = choice.min_value_share,
                 value_color = choice.value_color,
                 selected = state.selected == index,
                 hovered = state.hovered == index and state.selected ~= index,

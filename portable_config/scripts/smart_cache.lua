@@ -98,6 +98,19 @@ local function log(...)
     if opts.verbose then msg.info(...) end
 end
 
+local function ensure_directory(path)
+    if not path or path == "" then
+        return
+    end
+
+    mp.command_native({
+        "subprocess",
+        args = {"cmd", "/c", "mkdir", path},
+        capture_stdout = true,
+        capture_stderr = true,
+    })
+end
+
 local function is_network_path(path)
     if not path then return false end
     -- normalize ytdl:// prefix
@@ -194,13 +207,13 @@ local function apply_cache(bitrate_bps, duration, source_label)
     mp.set_property_number("cache-secs", actual_secs)
 
     if use_disk and not state.disk_cache_on then
-        -- ensure cache directory exists
         local dir = mp.command_native({"expand-path", opts.disk_cache_dir})
-        if dir then
-            mp.command_native({"subprocess", args={"cmd", "/c", "mkdir", dir}, capture_stdout=true, capture_stderr=true})
+        -- mpv's option for disk cache temp files is "demuxer-cache-dir".
+        if dir and dir ~= "" then
+            ensure_directory(dir)
         end
-        mp.set_property("cache-on-disk", "yes")
         mp.set_property("demuxer-cache-dir", dir or "")
+        mp.set_property("cache-on-disk", "yes")
         state.disk_cache_on = true
     elseif not use_disk and state.disk_cache_on then
         mp.set_property("cache-on-disk", defaults.cache_on_disk or "no")

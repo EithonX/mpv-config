@@ -27,7 +27,7 @@ local function set_title(filename)
     filename = url_decode(filename)
     -- Remove surrounding quotes if present just in case
     filename = string.gsub(filename, '^"(.+)"$', "%1")
-    filename = string.gsub(filename, "^'(.)'$", "%1")
+    filename = string.gsub(filename, "^'(.+)'$", "%1")
     mp.set_property("force-media-title", filename)
     msg.info("Resolved title: " .. filename)
 end
@@ -70,6 +70,11 @@ local function resolve_title(url)
     resolving = true
 
     local function parse_and_set(output)
+        -- The subprocess is async: if the user advanced to another file
+        -- before it returned, don't stamp this title onto the wrong file.
+        if mp.get_property("path") ~= url then
+            return
+        end
         local filename = extract_filename(output)
         if filename then
             set_title(filename)
@@ -93,7 +98,7 @@ local function resolve_title(url)
     
     local function try_powershell()
         -- Use .RawContent from Invoke-WebRequest to get the raw HTTP headers
-        local ps_cmd = string.format([[$r = Invoke-WebRequest -Uri '%s' -Method Get -Headers @{Range='bytes=0-0'} -UseBasicParsing -ErrorAction SilentlyContinue; if ($r) { Write-Output $r.RawContent }]], url:gsub("'", "''"))
+        local ps_cmd = string.format([[[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $r = Invoke-WebRequest -Uri '%s' -Method Get -Headers @{Range='bytes=0-0'} -UseBasicParsing -ErrorAction SilentlyContinue; if ($r) { Write-Output $r.RawContent }]], url:gsub("'", "''"))
         mp.command_native_async({
             name = "subprocess",
             args = {"powershell", "-NoProfile", "-Command", ps_cmd},
@@ -132,6 +137,10 @@ end
 
 mp.add_hook("on_load", 50, function()
     local path = mp.get_property("path")
+    -- A new file is loading; abandon any prior in-flight resolve so this
+    -- file isn't blocked by the single-flight guard. The path check in
+    -- parse_and_set ensures a late stale result can't apply here.
+    resolving = false
     if is_network_path(path) then
         resolve_title(path)
     else
