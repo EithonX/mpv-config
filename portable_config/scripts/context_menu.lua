@@ -2303,6 +2303,17 @@ local function build_panel_specs()
         local parent_key = parent_page.key
         local parent_state = ensure_page_state(parent_key)
         local anchor_choice = parent_state.hovered or parent_state.selected or 1
+        if parent_page.choices then
+            local ac = parent_page.choices[anchor_choice]
+            if not ac or ac.submenu_page ~= page_key then
+                for i, choice in ipairs(parent_page.choices) do
+                    if choice.submenu_page == page_key then
+                        anchor_choice = i
+                        break
+                    end
+                end
+            end
+        end
         local parent_width, _ = ui:measure_panel({
             panel_chars = parent_page.panel_chars,
             rows = parent_page.rows,
